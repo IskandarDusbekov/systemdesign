@@ -23,6 +23,7 @@ export function previewRow(o, biz, users, err) {
 function siteState(state) {
   const L = state.launch, m = state.metrics;
   if (!L.domain) return { kind: "dns" };
+  if (!L.done.deploy) return { kind: "notyet" };
   if (!m.path_ok || m.status === "down") return { kind: "502" };
   return { kind: "ok", slow: m.p95_ms > 1000, warnSlow: m.p95_ms > 300 };
 }
@@ -34,6 +35,12 @@ function browserBody(state, data, biz, offers) {
       <p class="muted">${esc(state.ctx.project)}.uz manzilining IP sini topib bo'lmadi.</p>
       <code>DNS_PROBE_FINISHED_NXDOMAIN</code>
       <p>Mijozlar saytni umuman topa olmaydi. <b>🚀 2-qadam: Domen</b> ni bajaring.</p></div>`;
+  }
+  if (st.kind === "notyet") {
+    return `<div class="br-error"><div class="br-big">🚧</div><h2>Sayt hali ishga tushmagan</h2>
+      <p class="muted">Domen bor, lekin serverda hali kod yo'q — Nginx odatiy sahifani ko'rsatyapti.</p>
+      <code>Welcome to nginx!</code>
+      <p><b>🚀 Deploy</b> qadamini bajaring — shunda sayt ochiladi va birinchi 50 ta foydalanuvchi keladi.</p></div>`;
   }
   if (st.kind === "502") {
     return `<div class="br-error"><h1 class="br-502">502 Bad Gateway</h1><hr><p class="muted">nginx/1.24.0 (Ubuntu)</p>
@@ -61,7 +68,7 @@ function browserBody(state, data, biz, offers) {
     `<div class="sp-art"><div class="sp-thumb">${["🚇", "💱", "💻", "☀"][i]}</div><div><b>${t}</b><div class="muted small">${fmt(state.room.users * (0.3 - i * 0.05))} marta o'qildi · reklama ko'rsatildi</div></div></div>`).join("")}</div>` : "";
   return `
     ${st.slow ? `<div class="br-loading"><span class="spin"></span> Sahifa ${(m.p95_ms / 1000).toFixed(1)} s da ochildi — mijozlarning ko'pi kutmasdan chiqib ketadi</div>` : ""}
-    ${L.pending_migration ? `<div class="br-django"><b>ProgrammingError at /smeta/</b><br>relation "smeta_smeta" does not exist<br><small>har 5 so'rovdan 1 tasi shu xatoni oladi — 🚀 Deploy ichida migrate qiling</small></div>` : ""}
+    ${L.pending_migration ? `<div class="br-django"><b>ProgrammingError at /products/</b><br>relation "app_order" does not exist<br><small>har 5 so'rovdan 1 tasi shu xatoni oladi — 🚀 Deploy ichida migrate qiling</small></div>` : ""}
     ${m.error_rate > 0.02 && !L.pending_migration ? `<div class="br-django" style="background:#fdecea">⚠ ${Math.round(m.error_rate * 100)}% mijoz "504 Gateway Timeout" ko'ryapti</div>` : ""}
     <div class="sp-nav"><b>${esc(biz.icon)} ${esc(state.room.name)}</b><span>Bosh sahifa</span><span>${esc(biz.site_name)}</span><span>Aloqa</span>
       ${state.metrics.bot_ok ? `<span class="sp-tg">✈ Telegram bot</span>` : ""}</div>
@@ -115,7 +122,7 @@ function adminHtml(state, data, ui, biz, offers) {
     <div class="kv"><span>Sotuvdan daromad</span><b class="pos">${usd(f.sales.revenue)}</b></div>
     ${f.sales.ads ? `<div class="kv"><span>Reklamadan</span><b class="pos">${usd(f.sales.ads)}</b></div>` : ""}
     ${f.sales.cogs ? `<div class="kv"><span>Mahsulot tannarxi</span><b class="neg">${usd(-f.sales.cogs)}</b></div>` : ""}
-    <div class="kv"><span>Server, elektr va boshqalar</span><b class="neg">${usd(-(f.cost - f.sales.cogs))}</b></div>
+    <div class="kv"><span>Server ijarasi va xizmatlar</span><b class="neg">${usd(-(f.cost - f.sales.cogs))}</b></div>
     <div class="kv total"><span>Sof foyda</span><b class="${f.net >= 0 ? "pos" : "neg"}">${usd(f.net, true)}</b></div>
     <h3>🔔 Jonli buyurtmalar</h3><div class="sp-feed" id="spFeed"></div>`;
 }
@@ -126,6 +133,109 @@ export function drawFeed() {
   const rows = recentLogs("money", 8);
   el.innerHTML = rows.length ? rows.map((l) => `<div class="${l.cls}"><span class="muted">${l.t}</span> ${esc(l.text.replace(/^\w+\s+/, ""))}</div>`).join("")
     : `<div class="muted">Hali buyurtma yo'q.</div>`;
+}
+
+// ---------------- Django admin (/admin/) ----------------
+const root0 = () => $("page-site");
+const SAMPLE = {
+  name: ["Krossovka Air", "Futbolka oq", "Kurtka qishki", "Shim jins", "Kepka"], title: ["Yangi kolleksiya", "Chegirma 20%", "Yozgi to'plam", "Bestseller", "Sovg'a to'plami"],
+  phone: ["+998 90 111 22 33", "+998 93 555 10 20", "+998 97 700 00 07", "+998 99 123 45 67", "+998 91 888 77 66"],
+  email: ["ali@mail.uz", "nodira@gmail.com", "sardor@inbox.uz", "malika@mail.ru", "jasur@gmail.com"],
+  status: ["yangi", "to'landi", "yo'lda", "yetkazildi", "bekor"], address: ["Chilonzor 9", "Yunusobod 4", "Sergeli 2", "Mirzo Ulug'bek", "Olmazor 12"],
+};
+function fakeVal(f, i) {
+  const n = f.name;
+  if (f.type === "BooleanField") return i % 3 ? "✅" : "❌";
+  if (f.type === "DateTimeField") return `2026-11-${String(20 - i).padStart(2, "0")} ${10 + i}:${i}5`;
+  if (f.type === "ForeignKey") return `${f.to} #${3 + i * 2}`;
+  if (f.type === "IntegerField") return String((i + 1) * (n.includes("qty") || n.includes("soni") ? 1 : 7));
+  if (f.type === "DecimalField") return `${(19.9 + i * 12.5).toFixed(2)}`;
+  const key = Object.keys(SAMPLE).find((k) => n.includes(k));
+  if (key) return SAMPLE[key][i % 5];
+  return f.type === "TextField" ? "Matn…" : `${n} ${i + 1}`;
+}
+const plural = (n) => `${n}s`;
+
+function djangoAdminHtml(state, ui) {
+  const models = state.schema?.models || state.models || [];
+  const cfg = ui.djDraft || state.admin || {};
+  if (!models.length) {
+    return `<div class="dj"><div class="dj-head">Django administration</div>
+      <div class="tip info">Admin panelda ko'rsatadigan jadval yo'q. Avval <b>Kod → app/models.py</b> da model yarating
+      (Model quruvchi → "Shablonni qo'yish").</div>
+      <button class="link" data-openfile="app/models.py">🗄 Model quruvchini ochish →</button></div>`;
+  }
+  const cur = models.find((m) => m.name === ui.djModel && cfg[m.name]?.on !== false) || null;
+  const list = models.map((m) => {
+    const off = cfg[m.name]?.on === false;
+    return `<tr class="${off ? "dj-off" : ""}"><th><button class="dj-a" data-djm="${esc(m.name)}" ${off ? "disabled" : ""}>${esc(plural(m.name))}</button>
+      ${off ? `<small class="muted"> — yashirilgan</small>` : ""}</th><td><span class="dj-add">＋ Qo'shish</span></td><td><span class="dj-chg">✎ O'zgartirish</span></td></tr>`;
+  }).join("");
+  let change = "";
+  if (cur) {
+    const c = cfg[cur.name] || { list: [], search: [], filter: [] };
+    const cols = c.list.length ? c.list : [];
+    const flds = cur.fields;
+    const rows = [0, 1, 2, 3, 4].map((i) => `<tr><td><input type="checkbox"></td><td class="dj-link">${cols.length ? 5 - i : `${cur.name} object (${5 - i})`}</td>
+      ${cols.map((n) => `<td>${esc(fakeVal(flds.find((f) => f.name === n), i))}</td>`).join("")}</tr>`).join("");
+    change = `
+      <div class="dj-crumb">Bosh sahifa › App › ${esc(plural(cur.name))}</div>
+      <div class="dj-title"><b>O'zgartirish uchun ${esc(cur.name)} tanlang</b><span class="dj-add btnish">＋ ${esc(cur.name)} qo'shish</span></div>
+      ${c.search.length ? `<div class="dj-search">🔍 <input placeholder="${c.search.map(esc).join(", ")} bo'yicha qidirish"> <button class="btn small">Qidirish</button></div>` : ""}
+      <div class="dj-body"><div class="of-wrap"><table class="dj-table"><thead><tr><th></th><th>${cols.length ? "ID" : esc(cur.name.toUpperCase())}</th>
+        ${cols.map((n) => `<th>${esc(n.toUpperCase())}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>
+        ${c.filter.length ? `<div class="dj-filter"><b>Filtr</b>${c.filter.map((n) => `<div><i>${esc(n)} bo'yicha</i><span>Hammasi</span></div>`).join("")}</div>` : ""}</div>
+      <div class="muted small">5 ta ${esc(cur.name)} (namuna ma'lumot)</div>`;
+  }
+  const edit = models.map((m) => {
+    const c = cfg[m.name] || { on: true, list: [], search: [], filter: [] };
+    const box = (key, f, ok) => ok ? `<input type="checkbox" data-dj="${esc(m.name)}" data-k="${key}" data-f="${esc(f.name)}" ${c[key].includes(f.name) ? "checked" : ""}>` : `<span class="muted">—</span>`;
+    return `<details class="dj-cfg" ${m.name === ui.djModel ? "open" : ""}><summary><label><input type="checkbox" data-djon="${esc(m.name)}" ${c.on !== false ? "checked" : ""}>
+        <b>${esc(m.name)}</b></label> <span class="muted small">adminda ko'rsatish</span></summary>
+      <table class="dj-cfg-t"><thead><tr><th>Maydon</th><th title="list_display — ro'yxatda ustun">ustun</th><th title="search_fields — qidiruv">qidiruv</th><th title="list_filter — o'ngdagi filtr">filtr</th></tr></thead>
+      <tbody>${m.fields.map((f) => `<tr><td class="mono">${esc(f.name)}</td><td>${box("list", f, true)}</td>
+        <td>${box("search", f, ["CharField", "TextField"].includes(f.type))}</td>
+        <td>${box("filter", f, ["BooleanField", "DateTimeField", "ForeignKey", "CharField"].includes(f.type))}</td></tr>`).join("")}</tbody></table></details>`;
+  }).join("");
+  return `<div class="dj">
+    <div class="dj-head">Django administration<span>XUSH KELIBSIZ, <b>ADMIN</b>. SAYTNI KO'RISH / CHIQISH</span></div>
+    ${cur ? change : `<div class="dj-crumb">Bosh sahifa</div>
+      <table class="dj-apps"><caption>APP</caption>${list}</table>
+      <table class="dj-apps"><caption>AUTHENTICATION AND AUTHORIZATION</caption>
+        <tr><th><span class="dj-a">Groups</span></th><td><span class="dj-add">＋ Qo'shish</span></td><td></td></tr>
+        <tr><th><span class="dj-a">Users</span></th><td><span class="dj-add">＋ Qo'shish</span></td><td></td></tr></table>`}
+    ${cur ? `<button class="link" data-djm="">← Bosh sahifa</button>` : ""}
+    <h3>⚙ Sozlash → <span class="mono">app/admin.py</span></h3>
+    <p class="muted small">Har jadval uchun: ro'yxatda qaysi <b>ustun</b>lar ko'rinsin (list_display), nima bo'yicha <b>qidirilsin</b> (search_fields),
+      o'ngda qanday <b>filtr</b> bo'lsin (list_filter). Saqlasangiz — kod o'zgaradi va kommit yoziladi.</p>
+    ${edit}
+    <div class="row" style="justify-content:space-between;margin-top:8px">
+      <button class="link" data-openfile="app/admin.py">{ } app/admin.py ni ko'rish</button>
+      <span class="row">${ui.djDraft ? `<button class="btn small ghost" id="djUndo">Bekor</button>` : ""}
+      <button class="btn primary small" id="djSave" ${ui.djDraft ? "" : "disabled"}>Saqlash · admin.py</button></span></div>
+    <div class="tip info small">Admin panelga kirish uchun serverda bir marta: <code>python manage.py createsuperuser</code> —
+      keyin <b>${esc(state.launch.domain || "sayt.uz")}/admin/</b> manzili orqali kirasiz. Bu sahifani faqat xodimlar ko'radi.</div>
+  </div>`;
+}
+
+function bindDjango(state, data, ui, actions) {
+  const root = root0(), rerender = () => renderSite(state, data, ui, actions);
+  const draft = () => (ui.djDraft ||= JSON.parse(JSON.stringify(state.admin || {})));
+  root.querySelectorAll("[data-djm]").forEach((b) => b.onclick = () => { ui.djModel = b.dataset.djm || null; rerender(); });
+  root.querySelectorAll("[data-djon]").forEach((b) => b.onchange = () => {
+    const d = draft(); d[b.dataset.djon] = { list: [], search: [], filter: [], ...(d[b.dataset.djon] || {}), on: b.checked }; rerender();
+  });
+  root.querySelectorAll("[data-dj]").forEach((b) => b.onchange = () => {
+    const d = draft(), m = (d[b.dataset.dj] ||= { on: true, list: [], search: [], filter: [] }), arr = m[b.dataset.k];
+    const i = arr.indexOf(b.dataset.f);
+    if (b.checked && i < 0) arr.push(b.dataset.f);
+    if (!b.checked && i >= 0) arr.splice(i, 1);
+    ui.djModel = b.dataset.dj;
+    rerender();
+  });
+  root.querySelectorAll("[data-openfile]").forEach((b) => b.onclick = () => actions.openFile(b.dataset.openfile));
+  if ($("djUndo")) $("djUndo").onclick = () => { ui.djDraft = null; rerender(); };
+  $("djSave").onclick = () => actions.saveAdmin(ui.djDraft);
 }
 
 export function renderSite(state, data, ui, actions) {
@@ -145,7 +255,12 @@ export function renderSite(state, data, ui, actions) {
       </div>
       <p class="muted small">Bu sahifa doskadagi tizimingizdan jonli yasaladi: server sekinlashsa — sayt ham sekinlashadi, baza yiqilsa — mijoz 502 ko'radi.</p>
     </section>
-    <aside class="card site-admin">${adminHtml(state, data, ui, biz, offers)}</aside>`;
+    <aside class="card site-admin">
+      <div class="seg"><button class="${ui.siteAdmin !== "django" ? "on" : ""}" data-sa="shop">🛒 Do'kon: narxlar</button>
+        <button class="${ui.siteAdmin === "django" ? "on" : ""}" data-sa="django">⚙ Django admin <small>/admin/</small></button></div>
+      ${ui.siteAdmin === "django" ? djangoAdminHtml(state, ui) : adminHtml(state, data, ui, biz, offers)}</aside>`;
+  root0().querySelectorAll("[data-sa]").forEach((b) => b.onclick = () => { ui.siteAdmin = b.dataset.sa; renderSite(state, data, ui, actions); });
+  if (ui.siteAdmin === "django") { bindDjango(state, data, ui, actions); return; }
   drawFeed();
 
   const root = $("page-site");

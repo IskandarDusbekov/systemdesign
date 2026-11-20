@@ -117,7 +117,7 @@ export function renderCode(state, data, ui, actions) {
   const slots = rows.filter((r) => r.editable).length;
 
   const banner = file.generated ? `<div class="ed-banner">Bu fayl <b>makemigrations</b> tomonidan avtomatik yaratilgan — qo'lda o'zgartirilmaydi.</div>`
-    : file.path === "smeta/models.py" ? `<div class="ed-banner">Modellar o'ngdagi <b>Model quruvchi</b> bilan o'zgaradi → yangi migratsiya fayli paydo bo'ladi.</div>`
+    : file.path === "app/models.py" ? `<div class="ed-banner">Modellar o'ngdagi <b>Model quruvchi</b> bilan o'zgaradi → yangi migratsiya fayli paydo bo'ladi.</div>`
     : isEnv ? `<div class="ed-banner ${state.code.env_gitignored ? "" : "warn"}">${state.code.env_gitignored ? ".env .gitignore da — Git'ga tushmaydi." : "⚠ .env .gitignore da emas — bu fayl Git'ga (va ochiq repoga) tushadi!"}</div>`
     : slots ? `<div class="ed-banner">Bu faylda <b>${slots}</b> ta o'zgartiriladigan joy bor (yashil ramka). Qolgan kod — o'qish va o'rganish uchun.</div>` : "";
 
@@ -139,7 +139,7 @@ export function renderCode(state, data, ui, actions) {
     <aside class="card ide-side" id="ideSide"></aside>`;
 
   // --- O'ng panel
-  if (file.path === "smeta/models.py" || file.generated) renderModelBuilder(state, data, actions, rerender);
+  if (file.path === "app/models.py" || file.generated) renderModelBuilder(state, data, actions, rerender);
   else if (isEnv) renderEnvSide(state, actions);
   else renderInfoSide(state, data, fields, v);
 
@@ -175,7 +175,7 @@ function renderInfoSide(state, data, fields, v) {
     [state.code.secret_source === "env", "SECRET_KEY .env dan o'qiladi", "qidiring: SECRET_KEY"],
     [state.code.env_gitignored, ".env .gitignore da", "fayl: .gitignore"],
     [state.code.ssl_redirect, "HTTP → HTTPS yo'naltirish", "qidiring: SSL"],
-    [state.code.report_mode === "background", "og'ir hisobot fonda", "fayl: smeta/views.py"],
+    [state.code.report_mode === "background", "og'ir hisobot fonda", "fayl: app/views.py"],
   ].map(([ok, t, hint]) => `<div class="check ${ok ? "ok" : ""}">${ok ? "✓" : "✗"} ${esc(t)}${ok ? "" : ` <span class="muted">· ${esc(hint)}</span>`}</div>`).join("");
   const eps = data.catalog.endpoints.map((e) => `
     <div class="ep"><span class="method m-${e.method.toLowerCase()}">${e.method}</span> <b class="mono">${esc(e.path)}</b>
@@ -189,7 +189,7 @@ function renderInfoSide(state, data, fields, v) {
     <h3>API manzillari</h3>${eps}
     <h3>Belgilar</h3>
     <div class="legend2"><span class="slot toggle on">True</span> o'zgartiriladi ·
-      <span class="ctx">${esc(state.ctx.domain)}</span> xonadan · <span class="secret">abc•••</span> .env siri</div>`;
+      <span class="ctx">${esc(state.ctx.domain)}</span> loyihadan · <span class="secret">abc•••</span> .env siri</div>`;
 }
 
 function renderEnvSide(state, actions) {
@@ -212,28 +212,44 @@ function renderModelBuilder(state, data, actions, rerender) {
   const targets = ["User", ...models.map((m) => m.name)];
   const card = (m, mi) => `
     <div class="mb-card">
-      <div class="mb-head"><b>${esc(m.name)}</b><span class="muted mono">smeta_${esc(m.name.toLowerCase())}</span>
+      <div class="mb-head"><b>${esc(m.name)}</b><span class="muted mono">app_${esc(m.name.toLowerCase())}</span>
         <button class="mini" data-delmodel="${mi}" title="Modelni o'chirish">✕</button></div>
       <div class="mb-f muted"><span>id</span><span>BigAutoField · PK</span></div>
       ${m.fields.map((f, fi) => `<div class="mb-f"><span>${esc(f.name)}</span>
         <span>${esc(f.type)}${f.type === "ForeignKey" ? " → " + esc(f.to) : f.type === "CharField" ? `(${f.max_length || 200})` : ""}</span>
         <button class="mini" data-delfield="${mi}:${fi}">✕</button></div>`).join("")}
-      <div class="mb-add">
+      <div class="mb-add" ${m.fields.length >= L.fields ? "style='display:none'" : ""}>
         <input placeholder="maydon" data-fname="${mi}" maxlength="30">
         <select data-ftype="${mi}">${Object.entries(types).map(([k, l]) => `<option value="${k}">${k} · ${esc(l)}</option>`).join("")}</select>
         <select data-fto="${mi}">${targets.filter((t) => t !== m.name).map((t) => `<option>${esc(t)}</option>`).join("")}</select>
         <button class="mini" data-addfield="${mi}">＋</button>
       </div>
+      ${m.fields.length >= L.fields ? `<div class="muted small">${L.fields} ta maydon — limit.</div>` : ""}
     </div>`;
+  const L = state.model_limits;
+  const nFields = models.reduce((s, m) => s + m.fields.length, 0);
+  const nFk = models.reduce((s, m) => s + m.fields.filter((f) => f.type === "ForeignKey").length, 0);
+  const load = 1 + 0.03 * models.length + 0.02 * nFk;
+  const meter = (v, max, label) => `<div class="mb-meter ${v > max ? "over" : v >= max ? "full" : ""}"><span>${label}</span><b>${v}/${max}</b>
+    <i style="width:${Math.min(100, (v / max) * 100)}%"></i></div>`;
+  const empty = models.filter((m) => !m.fields.length).map((m) => m.name);
+  const tpl = state.model_templates || [];
   $("ideSide").innerHTML = `
     <h2>🗄 Model quruvchi</h2>
+    <div class="mb-limits">${meter(models.length, L.models, "modellar")}${meter(nFields, L.total, "maydonlar")}${meter(nFk, L.fk, "bog'lanishlar")}</div>
+    <div class="tip ${load > 1.25 ? "warn" : "info"} small">Bazaga yuk: <b>×${load.toFixed(2)}</b> (har jadval +3%, har bog'lanish +2%).
+      Ko'p jadval — ko'p so'rov: PostgreSQL tezroq to'ladi. Faqat kerakli modellarni yarating.</div>
+    ${empty.length ? `<div class="tip bad small">Maydonsiz model saqlanmaydi: ${empty.map(esc).join(", ")}</div>` : ""}
+    ${tpl.length && !models.length ? `<div class="mb-tpl"><b>💡 Tavsiya (biznesingizga mos):</b> ${tpl.map((m) => esc(m.name)).join(", ")}
+      <button class="btn small" id="mbTpl">Shablonni qo'yish</button></div>` : ""}
     <p class="muted">Model — bazadagi jadval, maydon — ustun. Saqlasangiz: models.py o'zgaradi va
       <b>makemigrations</b> yangi migratsiya yozadi. Keyin 🚀 Deploy — migrate.</p>
     <div class="mb-card muted"><div class="mb-head"><b>User</b><span class="mono">auth_user</span></div>
       <div class="mb-f"><span>username, password, email…</span><span>Django tayyor beradi</span></div></div>
     ${models.map(card).join("")}
-    <div class="mb-new"><input id="mbName" placeholder="Yangi model (masalan Order)" maxlength="30">
-      <button class="btn small" id="mbAdd">＋ Model</button></div>
+    <div class="mb-new"><input id="mbName" placeholder="Yangi model (masalan Order)" maxlength="30" ${models.length >= L.models ? "disabled" : ""}>
+      <button class="btn small" id="mbAdd" ${models.length >= L.models ? "disabled" : ""}>＋ Model</button></div>
+    ${models.length >= L.models ? `<div class="muted small">Model limiti to'ldi — keraksizini o'chiring.</div>` : ""}
     <button class="btn primary" id="mbSave" style="width:100%;margin-top:8px" ${dirty ? "" : "disabled"}>Saqlash · makemigrations</button>
     <p><button class="link" data-guide="models">📖 Modellar va migratsiyalar</button></p>`;
 
@@ -252,15 +268,21 @@ function renderModelBuilder(state, data, actions, rerender) {
     const name = side.querySelector(`[data-fname="${mi}"]`).value.trim();
     const type = side.querySelector(`[data-ftype="${mi}"]`).value;
     if (!name) return;
+    if (!/^[a-z][a-z0-9_]{0,30}$/.test(name)) { alert("Maydon nomi kichik lotin harfda: masalan price, created_at"); return; }
+    if (models[Number(mi)].fields.some((x) => x.name === name)) { alert(`'${name}' allaqachon bor`); return; }
     const f = { name, type };
     if (type === "CharField") f.max_length = 200;
     if (type === "ForeignKey") f.to = side.querySelector(`[data-fto="${mi}"]`).value;
     models[Number(mi)].fields.push(f);
     rerender();
   });
+  if ($("mbTpl")) $("mbTpl").onclick = () => { tpl.forEach((m) => models.push(JSON.parse(JSON.stringify(m)))); rerender(); };
   $("mbAdd").onclick = () => {
     const name = $("mbName").value.trim();
-    if (name) { models.push({ name, fields: [] }); rerender(); }
+    if (!name) return;
+    if (!/^[A-Z][A-Za-z0-9]{1,30}$/.test(name)) { alert("Model nomi katta harf bilan, lotincha: masalan Order"); return; }
+    if (models.some((m) => m.name === name) || name === "User") { alert(`'${name}' nomi band`); return; }
+    models.push({ name, fields: [] }); rerender();
   };
   $("mbSave").onclick = () => actions.saveModels(JSON.parse(JSON.stringify(models)));
 }

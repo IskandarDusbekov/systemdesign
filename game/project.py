@@ -69,6 +69,91 @@ FILES = [
         "",
         "# repo ochiq (public): {repo_public}",
     ]},
+    {"path": "templates/base.html", "lang": "html", "lines": [
+        "<!doctype html>",
+        "<html lang=\"uz\">",
+        "<head>",
+        "  <meta charset=\"utf-8\">",
+        "  <title>{% block title %}[[project]]{% endblock %}</title>",
+        "  <link rel=\"stylesheet\" href=\"/static/css/style.css\">",
+        "</head>",
+        "<body>",
+        "  <header><a href=\"/\">[[project]]</a>",
+        "?has_auth     {% if user.is_authenticated %}{{ user.username }}{% else %}<a href=\"/auth/login/\">Kirish</a>{% endif %}",
+        "  </header>",
+        "  <main>{% block content %}{% endblock %}</main>",
+        "</body>",
+        "</html>",
+    ]},
+    {"path": "templates/index.html", "lang": "html", "lines": [
+        "{% extends \"base.html\" %}",
+        "{# Bosh sahifa: views.home shu shablonni ko'rsatadi #}",
+        "{% block content %}",
+        "  <h1>Xush kelibsiz!</h1>",
+        "  {% for item in items %}",
+        "    <div class=\"card\">{{ item.title }} — {{ item.price }} $</div>",
+        "  {% endfor %}",
+        "{% endblock %}",
+    ]},
+    {"path": "templates/auth/login.html", "lang": "html", "when": "has_auth", "lines": [
+        "{% extends \"base.html\" %}",
+        "{% block content %}",
+        "  <form method=\"post\" action=\"/auth/otp/\">{% csrf_token %}",
+        "    <input name=\"contact\" placeholder=\"[[auth_placeholder]]\">",
+        "    <button>Kod yuborish</button>",
+        "  </form>",
+        "{% endblock %}",
+    ]},
+    {"path": "media/README.md", "lang": "md", "lines": [
+        "# media/",
+        "Foydalanuvchilar yuklagan fayllar shu yerga tushadi (rasm, Excel, PDF).",
+        "Git'ga qo'shilmaydi (.gitignore da) — serverda turadi, zaxira nusxasini oling.",
+        "Nginx bu papkani to'g'ridan-to'g'ri beradi:  location /media/ { alias /srv/[[project]]/media/; }",
+    ]},
+    {"path": "accounts/__init__.py", "lang": "python", "when": "has_auth", "lines": []},
+    {"path": "accounts/views.py", "lang": "python", "when": "has_auth", "lines": [
+        "\"\"\"Avtorizatsiya: telefon/email → bir martalik kod (OTP) → kirish.\"\"\"",
+        "import secrets",
+        "",
+        "from django.conf import settings",
+        "from django.contrib.auth import get_user_model, login",
+        "from django.core.cache import cache          # Redis",
+        "from django.http import JsonResponse",
+        "",
+        "from .otp import CODE_TTL, MAX_ATTEMPTS, send_code",
+        "",
+        "",
+        "def request_otp(request):",
+        "    contact = request.POST[\"contact\"]                    # [[auth_placeholder]]",
+        "    code = f\"{secrets.randbelow(1_000_000):06d}\"           # 6 xonali tasodifiy kod",
+        "    cache.set(f\"otp:{contact}\", code, timeout=CODE_TTL)    # Redis: vaqti o'tsa o'chadi",
+        "    cache.set(f\"otp-try:{contact}\", 0, timeout=CODE_TTL)",
+        "    send_code(contact, code)                              # [[auth_method]] orqali",
+        "    return JsonResponse({\"sent\": True})",
+        "",
+        "",
+        "def verify_otp(request):",
+        "    contact, code = request.POST[\"contact\"], request.POST[\"code\"]",
+        "    tries = cache.incr(f\"otp-try:{contact}\")",
+        "    if tries > MAX_ATTEMPTS:",
+        "        return JsonResponse({\"error\": \"Juda ko'p urinish. Yangi kod so'rang.\"}, status=429)",
+        "    if cache.get(f\"otp:{contact}\") != code:",
+        "        return JsonResponse({\"error\": \"Kod noto'g'ri\"}, status=400)",
+        "    cache.delete(f\"otp:{contact}\")                        # kod bir martalik",
+        "    user, _ = get_user_model().objects.get_or_create(username=contact)",
+        "    login(request, user)",
+        "    return JsonResponse({\"ok\": True})",
+    ]},
+    {"path": "accounts/urls.py", "lang": "python", "when": "has_auth", "lines": [
+        "from django.urls import path",
+        "",
+        "from . import views",
+        "",
+        "urlpatterns = [",
+        "    path(\"otp/\", views.request_otp),       # 1) kod yuborish",
+        "    path(\"verify/\", views.verify_otp),     # 2) kodni tekshirish → kirish",
+        "]",
+    ]},
     {"path": "config/__init__.py", "lang": "python", "lines": []},
     {"path": "config/settings.py", "lang": "python", "lines": [
         "\"\"\"",
@@ -98,7 +183,8 @@ FILES = [
         "    \"django.contrib.sessions\",",
         "    \"django.contrib.messages\",",
         "    \"django.contrib.staticfiles\",",
-        "    \"smeta\",",
+        "    \"app\",",
+        "?has_auth     \"accounts\",    # avtorizatsiya (OTP)",
         "]",
         "",
         "DATABASES = {",
@@ -127,7 +213,22 @@ FILES = [
         "",
         "STATIC_URL = \"/static/\"",
         "STATIC_ROOT = BASE_DIR / \"staticfiles\"",
-        "MEDIA_ROOT = BASE_DIR / \"media\"",
+        "MEDIA_URL = \"/media/\"",
+        "MEDIA_ROOT = BASE_DIR / \"media\"        # foydalanuvchi yuklagan fayllar (rasm, Excel)",
+        "",
+        "# HTML shablonlar: templates/ papkasi",
+        "TEMPLATES = [{",
+        "    \"BACKEND\": \"django.template.backends.django.DjangoTemplates\",",
+        "    \"DIRS\": [BASE_DIR / \"templates\"],",
+        "    \"APP_DIRS\": True,",
+        "    \"OPTIONS\": {\"context_processors\": [\"django.template.context_processors.request\"]},",
+        "}]",
+        "?has_auth ",
+        "?has_auth # Avtorizatsiya (OTP) — sirlar .env da",
+        "?has_auth AUTH_OTP_METHOD = \"[[auth_method]]\"",
+        "?has_auth SMS_API_KEY = os.environ.get(\"SMS_API_KEY\")",
+        "?has_auth EMAIL_HOST = \"smtp.gmail.com\"",
+        "?has_auth EMAIL_HOST_PASSWORD = os.environ.get(\"EMAIL_HOST_PASSWORD\")",
     ]},
     {"path": "config/urls.py", "lang": "python", "lines": [
         "from django.contrib import admin",
@@ -135,7 +236,8 @@ FILES = [
         "",
         "urlpatterns = [",
         "    path(\"admin/\", admin.site.urls),",
-        "    path(\"\", include(\"smeta.urls\")),",
+        "?has_auth     path(\"auth/\", include(\"accounts.urls\")),",
+        "    path(\"\", include(\"app.urls\")),",
         "]",
     ]},
     {"path": "config/wsgi.py", "lang": "python", "lines": [
@@ -147,25 +249,25 @@ FILES = [
         "os.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"config.settings\")",
         "application = get_wsgi_application()",
     ]},
-    {"path": "smeta/__init__.py", "lang": "python", "lines": []},
-    {"path": "smeta/models.py", "lang": "python", "lines": [
+    {"path": "app/__init__.py", "lang": "python", "lines": []},
+    {"path": "app/models.py", "lang": "python", "lines": [
         "from django.conf import settings",
         "from django.db import models",
         "",
         "# Modellarni o'ngdagi 'Model quruvchi' bilan o'zgartiring.",
-        "# Har o'zgarish: makemigrations -> yangi fayl smeta/migrations/ da -> deploy (migrate).",
+        "# Har o'zgarish: makemigrations -> yangi fayl app/migrations/ da -> deploy (migrate).",
         "",
         "",
         "[[models_code]]",
     ]},
-    {"path": "smeta/admin.py", "lang": "python", "lines": [
+    {"path": "app/admin.py", "lang": "python", "lines": [
         "from django.contrib import admin",
         "",
         "from . import models",
         "",
         "[[admin_code]]",
     ]},
-    {"path": "smeta/views.py", "lang": "python", "lines": [
+    {"path": "app/views.py", "lang": "python", "lines": [
         "import os",
         "",
         "from django.contrib.auth.decorators import login_required",
@@ -197,7 +299,7 @@ FILES = [
         "?has_payment                       headers={\"Authorization\": os.environ[\"WEBHOOK_SECRET\"]}, timeout=10)",
         "?has_payment     return JsonResponse(r.json())",
     ]},
-    {"path": "smeta/urls.py", "lang": "python", "lines": [
+    {"path": "app/urls.py", "lang": "python", "lines": [
         "from django.urls import path",
         "",
         "from . import views",
@@ -208,7 +310,7 @@ FILES = [
         "?has_payment     path(\"pay/\", views.pay),",
         "]",
     ]},
-    {"path": "smeta/tasks.py", "lang": "python", "when": "has_worker", "lines": [
+    {"path": "app/tasks.py", "lang": "python", "when": "has_worker", "lines": [
         "from celery import shared_task",
         "",
         "from .reports import make_xlsx",
@@ -237,13 +339,13 @@ FILES = [
         "",
         "@dp.message(Command(\"start\"))",
         "async def start(message: types.Message):",
-        "    await message.answer(\"Salom! Smetalaringiz: /smetalar\")",
+        "    await message.answer(\"Salom! Buyurtmalaringiz: /buyurtmalar\")",
         "",
         "",
-        "@dp.message(Command(\"smetalar\"))",
-        "async def smetalar(message: types.Message):",
+        "@dp.message(Command(\"buyurtmalar\"))",
+        "async def buyurtmalar(message: types.Message):",
         "    async with aiohttp.ClientSession() as s:",
-        "        async with s.get(\"[[scheme]]://[[domain]]/api/smeta/?tg=\" + str(message.from_user.id)) as r:",
+        "        async with s.get(\"[[scheme]]://[[domain]]/api/items/?tg=\" + str(message.from_user.id)) as r:",
         "            data = await r.json()",
         "    await message.answer(\"\\n\".join(x[\"title\"] for x in data) or \"Smeta yo'q\")",
         "",
@@ -348,7 +450,7 @@ def visible_files(values, schema):
     """Daraxtda ko'rinadigan fayllar (+ migratsiyalar)."""
     files = [f for f in FILES if not f.get("when") or values.get(f["when"])]
     for mig in schema.get("migrations", []):
-        files.append({"path": f"smeta/migrations/{mig['name']}.py", "lang": "python", "lines": mig["lines"],
+        files.append({"path": f"app/migrations/{mig['name']}.py", "lang": "python", "lines": mig["lines"],
                       "generated": True})
     return files
 
@@ -365,8 +467,52 @@ FIELD_TYPES = {
     "DateTimeField": "sana-vaqt",
     "ForeignKey": "bog'lanish →",
 }
-MAX_MODELS = 8
-MAX_FIELDS = 12
+MAX_MODELS = 6          # bitta ilovada (app) — real loyihada ham ko'p model ilovalarga bo'linadi
+MAX_FIELDS = 10
+MAX_TOTAL_FIELDS = 36   # hamma modellardagi maydonlar yig'indisi
+MAX_FK = 8              # bog'lanishlar (ForeignKey) soni
+
+
+def db_load(models):
+    """Bazaga qo'shimcha yuk: har jadval +3%, har ForeignKey (JOIN) +2%."""
+    fks = sum(1 for m in models for f in m["fields"] if f["type"] == "ForeignKey")
+    return round(1 + 0.03 * len(models) + 0.02 * fks, 3)
+
+
+# Biznesga mos tayyor modellar (Model quruvchidagi "tavsiya" tugmasi)
+TEMPLATES = {
+    "shop": [
+        {"name": "Product", "fields": [{"name": "title", "type": "CharField", "max_length": 200},
+                                       {"name": "price", "type": "DecimalField"}, {"name": "stock", "type": "IntegerField"}]},
+        {"name": "Order", "fields": [{"name": "customer", "type": "ForeignKey", "to": "User"},
+                                     {"name": "total", "type": "DecimalField"}, {"name": "paid", "type": "BooleanField"},
+                                     {"name": "created", "type": "DateTimeField"}]},
+        {"name": "OrderItem", "fields": [{"name": "order", "type": "ForeignKey", "to": "Order"},
+                                         {"name": "product", "type": "ForeignKey", "to": "Product"},
+                                         {"name": "qty", "type": "IntegerField"}]},
+    ],
+    "news": [
+        {"name": "Article", "fields": [{"name": "title", "type": "CharField", "max_length": 200},
+                                       {"name": "body", "type": "TextField"}, {"name": "views", "type": "IntegerField"},
+                                       {"name": "created", "type": "DateTimeField"}]},
+        {"name": "Subscription", "fields": [{"name": "user", "type": "ForeignKey", "to": "User"},
+                                            {"name": "active", "type": "BooleanField"}]},
+    ],
+    "saas": [
+        {"name": "Plan", "fields": [{"name": "title", "type": "CharField", "max_length": 100},
+                                    {"name": "price", "type": "DecimalField"}]},
+        {"name": "Subscription", "fields": [{"name": "user", "type": "ForeignKey", "to": "User"},
+                                            {"name": "plan", "type": "ForeignKey", "to": "Plan"},
+                                            {"name": "active", "type": "BooleanField"}]},
+    ],
+    "delivery": [
+        {"name": "Dish", "fields": [{"name": "title", "type": "CharField", "max_length": 120},
+                                    {"name": "price", "type": "DecimalField"}]},
+        {"name": "Order", "fields": [{"name": "customer", "type": "ForeignKey", "to": "User"},
+                                     {"name": "address", "type": "CharField", "max_length": 255},
+                                     {"name": "total", "type": "DecimalField"}, {"name": "delivered", "type": "BooleanField"}]},
+    ],
+}
 
 
 class SchemaError(Exception):
@@ -430,7 +576,16 @@ def clean_models(raw):
                     raise SchemaError(f"{name}.{fname}: bog'lanadigan model topilmadi.")
                 item["to"] = to
             fields.append(item)
+        if not fields:
+            raise SchemaError(f"{name}: kamida bitta maydon kerak (bo'sh jadval foydasiz).")
         result.append({"name": name, "fields": fields})
+    total = sum(len(m["fields"]) for m in result)
+    if total > MAX_TOTAL_FIELDS:
+        raise SchemaError(f"Jami {total} ta maydon — ko'pi bilan {MAX_TOTAL_FIELDS}. Keraksizlarini olib tashlang: "
+                          "har ustun bazada joy va vaqt oladi.")
+    fks = sum(1 for m in result for f in m["fields"] if f["type"] == "ForeignKey")
+    if fks > MAX_FK:
+        raise SchemaError(f"{fks} ta bog'lanish (ForeignKey) — ko'pi bilan {MAX_FK}. Har bog'lanish so'rovda JOIN degani.")
     return result
 
 
@@ -469,8 +624,45 @@ def models_code(models):
     return out
 
 
-def admin_code(models):
-    return [f"admin.site.register(models.{m['name']})" for m in models] or ["# modellar yo'q"]
+def clean_admin(models, raw):
+    """Admin sozlamalari: {Model: {on, list, search, filter}} — faqat mavjud maydonlar."""
+    raw = raw if isinstance(raw, dict) else {}
+    out = {}
+    for m in models:
+        c = raw.get(m["name"]) if isinstance(raw.get(m["name"]), dict) else {}
+        names = [f["name"] for f in m["fields"]]
+        pick = lambda key, ok=names: [x for x in (c.get(key) or []) if x in ok][:6]
+        filt = [f["name"] for f in m["fields"] if f["type"] in ("BooleanField", "DateTimeField", "DateField", "ForeignKey", "CharField")]
+        text = [f["name"] for f in m["fields"] if f["type"] in ("CharField", "TextField", "EmailField")]
+        out[m["name"]] = {"on": c.get("on", True) is not False, "list": pick("list"),
+                          "search": pick("search", text), "filter": pick("filter", filt)}
+    return out
+
+
+def admin_code(models, cfg=None):
+    """app/admin.py: modellarni Django admin panelida ko'rsatish."""
+    cfg = clean_admin(models, cfg or {})
+    if not models:
+        return ["# modellar yo'q — Kod → app/models.py da model yarating"]
+    out = []
+    for m in models:
+        c, n = cfg[m["name"]], m["name"]
+        if not c["on"]:
+            out += [f"# {n} — adminda yashirilgan", ""]
+            continue
+        if not (c["list"] or c["search"] or c["filter"]):
+            out += [f"admin.site.register(models.{n})", ""]
+            continue
+        tup = lambda xs: "(" + ", ".join(repr(x) for x in xs) + ("," if len(xs) == 1 else "") + ")"
+        out += [f"@admin.register(models.{n})", f"class {n}Admin(admin.ModelAdmin):"]
+        if c["list"]:
+            out.append(f"    list_display = {tup(['id'] + c['list'])}")
+        if c["search"]:
+            out.append(f"    search_fields = {tup(c['search'])}")
+        if c["filter"]:
+            out.append(f"    list_filter = {tup(c['filter'])}")
+        out.append("")
+    return out[:-1] if out and out[-1] == "" else out
 
 
 def _ops(old, new):
@@ -512,7 +704,7 @@ def apply_models(schema, models):
     suffix = "initial" if n == 1 else (m.group(1).lower() if m else "auto")
     name = f"{n:04d}_{suffix}"
     deps = "[migrations.swappable_dependency(settings.AUTH_USER_MODEL)]" if n == 1 \
-        else f"[(\"smeta\", \"{migs[-1]['name']}\")]"
+        else f"[(\"app\", \"{migs[-1]['name']}\")]"
     lines = ["# makemigrations avtomatik yaratdi. Qo'lda tahrirlamang.",
              "from django.conf import settings",
              "from django.db import migrations, models",

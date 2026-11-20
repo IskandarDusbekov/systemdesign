@@ -35,12 +35,30 @@ SCENARIO_START = {
 }
 
 SANDBOX_START = {
-    "name": "Yangi xona", "kind": "sandbox",
-    "users": 50, "coins": 500, "power_limit_w": 600,
+    "name": "Yangi startup", "kind": "sandbox",
+    "users": 0, "coins": 500, "power_limit_w": 600,
     "servers": [{"ref": "vps1", "tier": "orta", "x": 330, "y": 360}],
     "blocks": [("users", None, 20, 210, {})],
     "edges": [],
     "launch": {},     # hammasini o'yinchi o'zi qiladi: 🚀 domen → GitHub → deploy → SSL
+}
+
+
+# Birinchi kirishda: tayyor kichik loyiha — bitta server, Nginx → Sayt → PostgreSQL ulangan.
+# O'yinchi faqat 🚀 qadamlarni bajaradi va keyin o'zi kengaytiradi.
+STARTER_START = {
+    "name": "Mening birinchi startupim", "kind": "sandbox",
+    "users": 0, "coins": 600, "power_limit_w": 600,
+    "servers": [{"ref": "vps1", "tier": "orta", "x": 330, "y": 330}],
+    "blocks": [
+        ("users", None, 20, 210, {}),
+        ("nginx", "vps1", 190, 210, {}),
+        ("app", "vps1", 360, 210, {}),
+        ("postgres", "vps1", 540, 210, {}),
+        ("payment", None, 540, 60, {}),
+    ],
+    "edges": [("users", "nginx"), ("nginx", "app"), ("app", "postgres"), ("app", "payment")],
+    "launch": {},
 }
 
 

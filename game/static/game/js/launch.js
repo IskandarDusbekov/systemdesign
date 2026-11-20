@@ -22,7 +22,10 @@ export function renderLaunchBar(state, data, actions) {
       </button>`).join("")}
     <span class="lb-url ${st.done.ssl ? "secure" : st.domain ? "insecure" : ""}" title="Saytingiz manzili">
       ${st.done.ssl ? "🔒" : st.domain ? "⚠" : "○"} ${esc(url)}</span>
-    ${st.pending_migration ? `<button class="lb-warn" data-step="deploy">⚠ migratsiya qo'llanmagan</button>` : ""}`;
+    ${st.pending_migration ? `<button class="lb-warn" data-step="deploy">⚠ migratsiya qo'llanmagan</button>` : ""}
+    ${state.suspended ? `<button class="lb-warn" data-resume>⛔ hosting to'xtagan — qayta yoqish</button>`
+      : state.neglected ? `<button class="lb-warn" data-resume>⏸ sayt to'xtagan (siz kirmadingiz) — yoqish</button>` : ""}`;
+  $("launchBar").querySelectorAll("[data-resume]").forEach((el) => el.onclick = () => actions.resume());
   $("launchBar").querySelectorAll("[data-step]").forEach((el) => el.onclick = () => openStep(el.dataset.step, state, data, actions));
 }
 
@@ -44,13 +47,14 @@ function vars(state) {
     repo: st.repo || ctx.repo, project: ctx.project };
 }
 const fill = (t, v) => t.replace(/\{(\w+)\}/g, (m, k) => (k in v ? v[k] : m));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm = (c) => c.trim().replace(/\s+/g, " ").replace(/^sudo /, "").replace(/;$/, "").replace(/'/g, '"');
 
 // --- Kichik terminal: o'yinchi buyruqni o'zi yozadi -----------------------
 //   tasks — launch.STEPS[...].terminal; onDone — oxirgi buyruqdan keyin (amal)
 function mountTerminal(tasks, v, { enabled, reason, onDone, finalLabel }) {
   const out = $("ttyOut"), inp = $("ttyIn"), ps = $("ttyPs"), task = $("ttyTask");
-  let i = 0, fails = 0;
+  let i = 0, fails = 0, typing = false;
   const print = (text, cls = "") => {
     out.insertAdjacentHTML("beforeend", `<div class="tty-l ${cls}">${esc(text)}</div>`);
     out.scrollTop = out.scrollHeight;
@@ -74,12 +78,32 @@ function mountTerminal(tasks, v, { enabled, reason, onDone, finalLabel }) {
     inp.value = fill(tasks[i].cmd, v);
     inp.focus();
   };
+  // ▶ tizim buyruqni harfma-harf yozib, o'zi Enter bosadi
+  const typeDemo = async () => {
+    if (i >= tasks.length || typing) return;
+    typing = true;
+    const cmd = fill(tasks[i].cmd, v);
+    inp.value = "";
+    inp.classList.add("typing");
+    for (const ch of cmd) { inp.value += ch; await sleep(cmd.length > 40 ? 28 : 55); }
+    await sleep(400);
+    inp.classList.remove("typing");
+    typing = false;
+    inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  };
+  $("ttyDemo").onclick = typeDemo;
   inp.focus();
+  let first = false;
+  try { first = localStorage.getItem("vallum.ttydemo") !== "1"; localStorage.setItem("vallum.ttydemo", "1"); } catch { /* bo'sh */ }
+  if (first) {
+    print("# Birinchi marta: tizim 1-buyruqni o'zi yozib ko'rsatadi. Keyingilarini o'zingiz yozing (▶ tugmasi doim yordam beradi).", "hint");
+    setTimeout(typeDemo, 900);
+  }
   inp.addEventListener("keydown", async (e) => {
     if (e.key !== "Enter" || i >= tasks.length) return;
     const raw = inp.value;
     inp.value = "";
-    if (!raw.trim()) return;
+    if (!raw.trim() || typing) return;
     print(`${ps.textContent} ${raw}`, "cmd");
     const t = tasks[i], c = norm(raw);
     const ok = [t.cmd, ...(t.alt || [])].some((x) => norm(fill(x, v)) === c)
@@ -87,7 +111,7 @@ function mountTerminal(tasks, v, { enabled, reason, onDone, finalLabel }) {
     if (c === "clear") { out.innerHTML = ""; return; }
     // zararsiz yordamchi buyruqlar — vazifaga ta'sir qilmaydi
     const builtins = {
-      ls: "README.md  config  manage.py  requirements.txt  smeta  deploy", pwd: ps.textContent.includes("/srv/") ? `/srv/${v.project}` : "/root",
+      ls: "README.md  config  manage.py  requirements.txt  app  accounts  templates  static  media  deploy", pwd: ps.textContent.includes("/srv/") ? `/srv/${v.project}` : "/root",
       whoami: ps.textContent.startsWith("root") ? "root" : "men", help: `vazifa: ${fill(t.ask, v)} · 💡 tugmasi buyruqni ko'rsatadi`,
     };
     if (!ok && builtins[c]) { print(builtins[c], "muted"); return; }
@@ -177,7 +201,8 @@ export function openStep(id, state, data, actions) {
           <div class="tty-out" id="ttyOut"></div>
           <div class="tty-line"><span class="tty-ps" id="ttyPs"></span><input id="ttyIn" autocomplete="off" spellcheck="false"></div>
         </div>
-        <div class="row" style="justify-content:space-between"><button class="link" id="ttyHint">💡 buyruqni ko'rsat</button>
+        <div class="row tty-actions"><span class="row"><button class="btn small" id="ttyDemo">▶ Yozib ko'rsat</button>
+          <button class="link" id="ttyHint">💡 buyruqni qo'yish</button></span>
           <span class="muted small">${term.final ? "Oxirgi buyruqdan keyin qadam bajariladi" : "Mashq: real serverda shunday tekshiriladi"}</span></div>
       </div>
     </div>`;

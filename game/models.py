@@ -36,6 +36,13 @@ class Room(models.Model):
     def __str__(self):
         return f"{self.name} (kun {self.day})"
 
+    def save(self, *args, **kwargs):
+        """Balans hamma startuplar uchun BITTA (umumiy hamyon): o'zgarsa — hamma qatorga yoziladi."""
+        super().save(*args, **kwargs)
+        fields = kwargs.get("update_fields")
+        if fields is None or "coins" in fields:
+            Room.objects.exclude(pk=self.pk).exclude(coins=self.coins).update(coins=self.coins)
+
 
 class Block(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="blocks")

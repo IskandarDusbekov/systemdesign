@@ -20,28 +20,29 @@ export function renderStats(state) {
   const servers = state.blocks.filter((b) => b.kind === "server");
   const f = state.finance;
   const net = f.net;
-  const powerCost = f.items[f.items.length - 1].amount;
   const bn = m.bottleneck ? state.blocks.find((b) => b.id === m.bottleneck) : null;
   const cells = [
     ["Holat", m.status_title, `status-${m.status}`, bn ? `tor bo'g'iz: ${bn.name}` : "tor bo'g'iz yo'q"],
-    ["Foydalanuvchi", fmt(r.users), "", ""],
+    ["Foydalanuvchi", fmt(r.users), "", state.launch.done.deploy ? "" : "deploydan keyin 50 ta keladi"],
     ["Yuklama", `${m.rps.toFixed(1)} req/s`, "", `${m.apps} ta Sayt · ${m.total_workers} worker`],
     ["Javob p95", `${fmt(m.p95_ms)} ms`, m.p95_ms > 1000 ? "status-red" : m.p95_ms > 300 ? "status-yellow" : "", `hisobot ${fmt(m.report_ms)} ms`],
-    ["Xatolar", pct(m.error_rate), m.error_rate > 0.02 ? "status-red" : m.error_rate > 0.005 ? "status-yellow" : "", ""],
-    ["Balans", usd(r.coins), r.coins < 0 || (f.runway !== null && f.runway <= 3) ? "status-red" : net > 0 ? "status-green" : "",
-      `${net >= 0 ? "+" : ""}${net.toFixed(0)} / kun${f.runway !== null ? ` · ${f.runway} kunga yetadi` : ""}`],
+    m.status === "idle" ? ["Xatolar", "—", "", "sayt hali ochilmagan"]
+      : ["Xatolar", pct(m.error_rate), m.error_rate > 0.02 ? "status-red" : m.error_rate > 0.005 ? "status-yellow" : "", ""],
     ["Daromad", `${usd(f.revenue, true)}/kun`, f.revenue > 0 ? "" : "status-yellow", f.revenue > 0 ? `${f.per_user} × foydalanuvchi` : "to'lov yo'q"],
-    ["Xarajat", `${usd(-f.cost)}/kun`, "", `elektr ${usd(powerCost)} · ijara ${usd(f.cost - powerCost)}`],
-    ["Elektr", `${m.power_used} / ${m.power_limit} W`, m.power_used > m.power_limit ? "status-red" : "", `${usd(-powerCost)}/kun`],
+    ["Xarajat", `${usd(-f.cost)}/kun`, f.runway !== null && f.runway <= 3 ? "status-red" : "",
+      state.suspended ? "⛔ hosting to'xtagan" : state.neglected ? "⏸ sayt to'xtagan" : f.runway !== null ? `pul ${runwayText(state)} ga yetadi` : "ijara + xizmatlar"],
     ["Serverlar", `${servers.length} ta`, Object.values(m.hosts).some((h) => h.over_cpu || h.over_ram) ? "status-red" : "", servers.map((s) => s.ip).join(" · ")],
   ];
   $("stats").innerHTML = cells.map(([k, v, cls, sub]) =>
     `<div class="stat ${cls}"><div class="k">${k}</div><div class="v">${esc(v)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`).join("");
-  $("dayChip").textContent = `Kun ${r.day}`;
+  // soat app.js da har soniya yangilanadi
   $("econLine").textContent = `bugun: daromad ${usd(f.revenue, true)} · xarajat ${usd(-f.cost)} · sof foyda ${usd(net, true)}`;
   // Yuqori panel: katta balans va foyda
   const month = state.history.slice(-30).reduce((s, d) => s + d.revenue - d.cost, 0);
-  $("balance").innerHTML = `<span class="bal-l">Balans</span><b class="${r.coins < 0 ? "neg" : ""}">${usd(r.coins)}</b>
+  const kassa = state.kassa || 0;
+  $("balance").innerHTML = `<span class="bal-l" title="Bitta hamyon — hamma startuplar uchun">Umumiy balans</span><b class="${r.coins < 0 ? "neg" : ""}">${usd(r.coins)}</b>
+    <button class="kassa-btn ${kassa >= 1 ? "full" : ""}" data-withdraw title="To'lov shlyuzida yig'ilgan pul — bosib balansga o'tkazing">
+      💰 kassa ${usd(kassa)}${kassa >= 1 ? " · yechib olish" : ""}</button>
     <span class="bal-s ${net > 0 ? "pos" : net < 0 ? "neg" : ""}">bugun ${usd(net, true)}</span>
     <span class="bal-s ${month > 0 ? "pos" : month < 0 ? "neg" : ""}">30 kun ${usd(month, true)}</span>`;
 }
@@ -51,12 +52,13 @@ export function renderStats(state) {
 // -------------------------------------------------------------------------
 export function renderRooms(state, actions) {
   $("rooms").innerHTML = `
-    <select id="roomSel" title="Xonani almashtirish">
-      ${state.rooms.map((r) => `<option value="${r.id}" ${r.id === state.room.id ? "selected" : ""}>${r.kind === "scenario" ? "★" : "▢"} ${esc(r.name)} · kun ${r.day}</option>`).join("")}
+    <span class="rooms-l">Startup</span>
+    <select id="roomSel" title="Startupni almashtirish">
+      ${state.rooms.map((r) => `<option value="${r.id}" ${r.id === state.room.id ? "selected" : ""}>${r.kind === "scenario" ? "★" : "💡"} ${esc(r.name)} · kun ${r.day}</option>`).join("")}
     </select>
-    <button class="btn small" id="roomNew" title="Yangi xona">＋ Xona</button>
+    <button class="btn small" id="roomNew" title="Yangi startup yoki g'oya">＋ Yangi g'oya</button>
     <button class="btn small ghost" id="roomRen" title="Nomini o'zgartirish">✎</button>
-    <button class="btn small ghost" id="roomDel" title="Xonani o'chirish">🗑</button>`;
+    <button class="btn small ghost" id="roomDel" title="Startupni o'chirish">🗑</button>`;
   $("roomSel").onchange = (e) => actions.openRoom(Number(e.target.value));
   $("roomNew").onclick = actions.newRoom;
   $("roomRen").onclick = actions.renameRoom;
@@ -75,8 +77,8 @@ export function renderToolbar(state, catalog, actions) {
       .map(([kind, s]) => {
         const n = count[kind] || 0;
         const full = n >= s.max_count;
-        const price = kind === "server" ? `$${catalog.servers.orta.rent}` : s.cost ? `$${s.cost}` : "bepul";
-        const res = s.external ? "tashqi xizmat" : kind === "server" ? "2 CPU · 4 GB" : `${s.cpu}${s.per_unit ? "+" : ""} CPU · ${s.power_w}W`;
+        const price = kind === "server" ? `$${catalog.servers.orta.rent}/kun` : s.rent ? `$${s.rent}/kun` : s.external ? "foiz/so'rov" : "bepul";
+        const res = s.external ? "tashqi xizmat" : kind === "server" ? "ijara · 2 CPU" : `kod · ${s.cpu}${s.per_unit ? "+" : ""} CPU`;
         return `<div class="tool ${full ? "disabled" : ""}" draggable="${!full}" data-kind="${kind}">
           <div class="tool-ico">${blockShape(s)}</div>
           <div class="tool-t">${esc(s.title)}</div>
@@ -87,19 +89,28 @@ export function renderToolbar(state, catalog, actions) {
     return `<div class="tool-group"><div class="tool-h">${esc(title)}</div><div class="tool-row">${items}</div></div>`;
   }).join("");
   $("toolbar").innerHTML = `${groups}
-    <div class="tool-group tool-power"><div class="tool-h">Elektr</div>
-      <div class="kv"><span>limit</span><b>${state.metrics.power_used}/${state.metrics.power_limit} W</b></div>
-      ${bar(state.metrics.power_used, state.metrics.power_limit)}
-      <button class="btn small" id="btnPower">⚡ +${catalog.power_upgrade.step_w} W · $${catalog.power_upgrade.cost}</button>
-      <div class="tool-s" style="margin-top:6px">Blok ustiga keling — nima ekanligi chiqadi.<br>Doskaga sudrang yoki bosib "＋ Qo'shish".</div>
+    <div class="tool-group tool-power"><div class="tool-h">Narxlar</div>
+      <div class="tool-s">💻 Dasturlar (Nginx, Django, Postgres...) — <b>bepul</b>, bu kod.<br>
+      💳 Pul faqat: server ijarasi, domen va tashqi xizmatlar (CDN, to'lov 2%, SMS).<br>
+      Blok ustiga keling — tushuntirish chiqadi.</div>
     </div>`;
-  $("btnPower").onclick = actions.power;
   $("toolbar").querySelectorAll(".tool").forEach((el) => {
     el.addEventListener("dragstart", (e) => { hidePop(true); e.dataTransfer.setData("text/kind", el.dataset.kind); });
     el.addEventListener("mouseenter", () => showPop(el, state, catalog, actions, false));
     el.addEventListener("mouseleave", () => hidePop());
     el.addEventListener("click", () => showPop(el, state, catalog, actions, true));
   });
+}
+
+// Qo'shilsa nima bo'ladi: bir martalik narx va kunlik xarajat o'zgarishi
+function whatIf(kind, s, state, catalog) {
+  const daily = kind === "server" ? catalog.servers.orta.rent : (s.rent || 0);
+  const f = state.finance;
+  if (!daily) return `<div class="tp-what"><b>Qo'shsangiz:</b> bepul — bu dastur (kod), mavjud server ichida ishlaydi.
+    ${s.external ? "<div class='muted small'>Tashqi xizmat: ishlatilganiga qarab haq oladi (masalan to'lov 2%, SMS $0.02).</div>" : "<div class='muted small'>Faqat serverda joy (CPU/RAM) kerak.</div>"}</div>`;
+  return `<div class="tp-what"><b>Qo'shsangiz:</b> kuniga +$${daily.toFixed(1)} xarajat
+    → sof ${usd(f.net, true)} ⇒ <b class="${f.net - daily >= 0 ? "pos" : "neg"}">${usd(f.net - daily, true)}</b>/kun
+    <div class="muted small">Foyda qaytishi blok ishlatilganda: tezlik ↑ → xato ↓, mijoz o'sishi ↑.</div></div>`;
 }
 
 // --- Asbob haqida ma'lumot oynasi (hover — ko'rish, bosish — mahkamlash va qo'shish)
@@ -131,19 +142,20 @@ function showPop(anchor, state, catalog, actions, pin) {
   const kind = anchor.dataset.kind, s = catalog.blocks[kind];
   const n = state.blocks.filter((b) => b.kind === kind).length;
   const full = n >= s.max_count;
-  const price = kind === "server" ? catalog.servers.orta.rent : s.cost || 0;
+  const price = kind === "server" ? catalog.servers.orta.rent : 0;
   const reqs = (catalog.requirements[kind] || []).map((r) => `<li>${esc(r.text)}</li>`).join("");
   const res = s.external ? "Tashqi xizmat — serverga joylanmaydi"
-    : kind === "server" ? `O'rta: 2 CPU · 4 GB RAM · 120 W · ijara $${catalog.servers.orta.rent}/kun`
-    : `${s.cpu} CPU · ${s.ram_mb} MB RAM · ${s.power_w} W${s.per_unit ? ` (+ har ${s.per_unit.field} uchun ${s.per_unit.cpu} CPU)` : ""}`;
+    : kind === "server" ? `O'rta: 2 CPU · 4 GB RAM`
+    : `${s.cpu} CPU · ${s.ram_mb} MB RAM${s.per_unit ? ` (+ har ${s.per_unit.field} uchun ${s.per_unit.cpu} CPU)` : ""}`;
   const el = popEl();
   el.innerHTML = `
     <div class="tp-head"><div class="tp-ico">${blockShape(s)}</div>
       <div><b>${esc(s.title)}</b><div class="muted">${esc(s.subtitle)}</div></div></div>
     <p>${esc(s.about)}</p>
-    <div class="kv small"><span>Narx</span><b>${price ? "$" + price : "bepul"}${s.rent ? ` + $${s.rent}/kun` : ""}</b></div>
+    <div class="kv small"><span>Narx</span><b>${price ? `$${price}/kun ijara` : s.rent ? `$${s.rent}/kun obuna` : s.external ? "ishlatilganiga qarab" : "bepul (kod)"}</b></div>
     <div class="kv small"><span>Resurs</span><span>${esc(res)}</span></div>
     ${reqs ? `<div class="tp-req"><b>Ishlashi uchun ulang:</b><ul>${reqs}</ul></div>` : ""}
+    ${whatIf(kind, s, state, catalog)}
     <div class="row" style="justify-content:space-between;margin-top:8px">
       ${s.guide ? `<button class="link" id="tpGuide">📖 qo'llanma</button>` : "<span></span>"}
       <button class="btn primary small" id="tpAdd" ${full ? "disabled" : ""}>${full ? `ko'pi bilan ${s.max_count} ta` : "＋ Doskaga qo'shish"}</button>
@@ -199,6 +211,32 @@ function serversHtml(state) {
   }).join("");
 }
 
+// Balans necha soat/kunga yetadi (o'yin vaqti)
+function runwayText(state) {
+  const f = state.finance, perHour = -f.net / 24;
+  if (perHour <= 0) return "";
+  const hours = Math.floor(state.room.coins / perHour);
+  return hours < 24 ? `${hours} o'yin soati` : `${Math.floor(hours / 24)} kun ${hours % 24} soat`;
+}
+
+// Hosting to'xtatilgan: nima bo'ldi va qayta yoqilsa nima bo'ladi
+export function suspendedHtml(state) {
+  const f = state.finance;
+  if (!state.suspended && state.neglected) return `<div class="suspended neglect">
+    <b>⏸ Sayt to'xtadi — siz uzoq kirmadingiz</b>
+    <p>Egasi 3 kundan ortiq kelmasa, tizim o'zi ishlamaydi: buyurtmalar kelmaydi, lekin server ijarasi to'lanib turadi.
+      Har kuni bir marta kirib, holatni tekshirib turing.</p>
+    <p>Yoqilsa: <b class="${f.net >= 0 ? "pos" : "neg"}">${usd(f.net, true)}/kun</b>.</p>
+    <button class="btn primary" data-resume>▶ Saytni qayta yoqish</button></div>`;
+  if (!state.suspended) return "";
+  return `<div class="suspended">
+    <b>⛔ Hosting to'xtatildi${state.suspended_at ? ` (${esc(state.suspended_at)})` : ""}</b>
+    <p>Balans tugadi — serverlar o'chirildi. Sayt ishlamayapti, pul ham ketmayapti. Mijozlar kuniga ~3% kamayadi.</p>
+    <p>Qayta yoqilsa: daromad ${usd(f.revenue, true)}, xarajat ${usd(-f.cost)} → <b class="${f.net >= 0 ? "pos" : "neg"}">${usd(f.net, true)}/kun</b>.
+      ${f.net < 0 ? "Zarar bilan yoqsangiz — tez orada yana to'xtaydi. Avval server turini kichraytiring yoki keraksiz bloklarni o'chiring." : ""}</p>
+    <button class="btn primary" data-resume>▶ Serverlarni qayta yoqish</button></div>`;
+}
+
 // Bugungi pul oqimi: qayerdan keladi, qayerga ketadi
 function financeHtml(state) {
   const f = state.finance, r = state.room;
@@ -212,9 +250,12 @@ function financeHtml(state) {
     <div class="fin-why">${esc(f.revenue_why)}</div>
     ${f.items.map((i) => `<div class="fin-row out"><span>${esc(i.label)}</span><b>${usd(-i.amount)}</b></div>`).join("")}
     <div class="fin-row total ${f.net >= 0 ? "pos" : "neg"}"><span>Sof natija</span><b>${sign(f.net)} / kun</b></div>
-    <div class="fin-row"><span>Kassa: hozir → ertaga</span><b>${usd(r.coins)} → ${usd(r.coins + f.net)}</b></div>
-    ${f.runway !== null ? `<div class="tip ${f.runway <= 3 ? "bad" : "warn"}">Har kuni minus: kassa <b>${f.runway} kunga</b> yetadi.
-      ${f.bankrupt_days} kun ketma-ket minusda bo'lsa — bankrot. ${f.revenue ? "Xarajatni kamaytiring." : "Avval To'lov shlyuzi + HTTPS."}
+    <div class="fin-row"><span>Balans: hozir</span><b>${usd(r.coins)}</b></div>
+    <div class="fin-row in"><span>💰 To'lov kassasida</span><b>${usd(state.kassa || 0)}</b></div>
+    <div class="fin-why">Mijoz to'lovlari avval To'lov shlyuzida yig'iladi. Xarajat esa balansdan ketadi — vaqtida yechib oling.
+      ${(state.kassa || 0) >= 1 ? `<button class="btn small primary" data-withdraw>💰 Yechib olish</button>` : ""}</div>
+    ${f.runway !== null && !state.suspended ? `<div class="tip ${f.runway <= 1 ? "bad" : "warn"}">Zarar: balans taxminan <b>${runwayText(state)}</b> ga yetadi.
+      Tugasa — hosting serverlarni to'xtatadi (sayt ishlamaydi, mijozlar kamayadi). ${f.revenue ? "Xarajatni kamaytiring." : "Avval To'lov shlyuzi + HTTPS."}
       <button class="link" data-guide="money">📖 Pul</button></div>` : ""}
   </div>`;
 }
@@ -233,18 +274,19 @@ function renderOverview(state, data, actions) {
       </div>` : ""}</div>`).join("");
   const intro = r.kind === "scenario"
     ? data.scenario.intro.map(esc).join("<br>")
-    : `<b>${esc(r.name)}</b> — bo'sh xona. Yuqoridagi paneldan bloklarni qo'shing:<br>
+    : `<b>${esc(r.name)}</b> — yangi startup. Yuqoridagi paneldan bloklarni qo'shing:<br>
        Foydalanuvchilar → Nginx → Sayt → PostgreSQL zanjirini quring. Har xizmat qaysi serverda ishlashini inspektorda tanlang.`;
 
   $("right").innerHTML = `
     <div class="intro-box">${intro}</div>
-    ${r.neg_streak >= 3 ? `<div class="tip bad"><b>Bankrot.</b> Kassa 3 kun ketma-ket minusda. ↺ bilan qaytadan boshlang.</div>` : ""}
+    ${suspendedHtml(state)}
     ${financeHtml(state)}
     ${goals ? `<h2>Maqsadlar</h2>${goals}` : ""}
     <h3>Maslahatchi</h3>${tips}
     <h3>Serverlar</h3>${serversHtml(state) || `<p class="muted">Server yo'q — asboblar panelidan qo'shing.</p>`}`;
 
   $("right").querySelectorAll("[data-guide]").forEach((el) => el.onclick = () => actions.guide(el.dataset.guide));
+  $("right").querySelectorAll("[data-resume]").forEach((el) => el.onclick = () => actions.resume());
   $("right").querySelectorAll("[data-block]").forEach((el) => el.onclick = () => actions.selectBlock(Number(el.dataset.block)));
 }
 
@@ -321,7 +363,7 @@ function renderInspector(block, state, data, ui, actions) {
     const inside = state.blocks.filter((b) => b.host === block.id);
     hostHtml = `<div class="srv-card">
       <div class="kv"><span>IP</span><b class="mono">${esc(block.ip)} ${block.config.public ? "(ochiq)" : "(ichki tarmoq)"}</b></div>
-      <div class="kv small"><span>${esc(tier.title)}</span><span>$${tier.rent}/kun · ${tier.power_w} W</span></div>
+      <div class="kv small"><span>${esc(tier.title)}</span><span>$${tier.rent}/kun</span></div>
       <div class="kv small"><span>CPU</span><span>${h.cpu_used} / ${h.cpu_total} yadro</span></div>${bar(h.cpu_used, h.cpu_total)}
       <div class="kv small"><span>RAM</span><span>${fmt(h.ram_used)} / ${fmt(h.ram_total)} MB</span></div>${bar(h.ram_used, h.ram_total)}
       <div class="small muted">Ichida: ${inside.length ? inside.map((b) => `<button class="link" data-block="${b.id}">${esc(b.name)}</button>`).join(", ") : "hech narsa"}</div>
@@ -459,9 +501,9 @@ function tablesHtml(state) {
   const models = state.schema.models || [];
   return `<h3>Jadvallar</h3>
     <div class="kv small"><span class="mono">auth_user</span><span class="muted">Django</span></div>
-    ${models.map((m) => `<div class="kv small"><span class="mono">smeta_${esc(m.name.toLowerCase())}</span>
+    ${models.map((m) => `<div class="kv small"><span class="mono">app_${esc(m.name.toLowerCase())}</span>
       <span>${m.fields.length + 1} ustun</span></div>`).join("")}
-    <button class="link" data-openfile="smeta/models.py">🗄 Model quruvchini ochish →</button>`;
+    <button class="link" data-openfile="app/models.py">🗄 Model quruvchini ochish →</button>`;
 }
 
 function resourcesOf(cfg, spec) {
@@ -477,33 +519,59 @@ function resourcesOf(cfg, spec) {
 // Kunlik grafik: chiziq — foydalanuvchilar, ustunlar — p95 (holat rangida)
 // -------------------------------------------------------------------------
 export function renderChart(state) {
-  const h = state.history;
+  const h = state.history.slice(-30);
   const el = $("chart");
   if (!h.length) {
-    el.innerHTML = `<div class="muted" style="padding:30px 0;text-align:center">Kunlarni o'tkazing (▶ yoki +1 kun) — grafik shu yerda paydo bo'ladi.</div>`;
+    el.innerHTML = `<div class="ch-empty">Birinchi o'yin kuni tugagach (20 daqiqa) bu yerda grafik paydo bo'ladi:
+      foydalanuvchilar soni va har kungi foyda.</div>`;
     return;
   }
-  const W = 1000, H = 120, P = 22;
-  const maxU = Math.max(...h.map((d) => d.users), 100);
-  const n = h.length;
-  const x = (i) => P + (i + 0.5) * ((W - 2 * P) / n);
-  const bw = Math.max(2, (W - 2 * P) / n - 2);
-  const col = { green: "#b2d491", yellow: "#e8a33a", red: "#d9577a", down: "#7d241d" };
-  const bars = h.map((d, i) => {
-    const bh = Math.min(H - 2 * P, (Math.min(d.p95_ms, 3000) / 3000) * (H - 2 * P));
-    return `<rect x="${x(i) - bw / 2}" y="${H - P - bh}" width="${bw}" height="${bh}" fill="${col[d.status]}" opacity=".75"><title>Kun ${d.day}: p95 ${d.p95_ms} ms, ${d.users} foyd., ${d.status}</title></rect>`;
+  const W = Math.max(260, Math.floor((el.clientWidth || 900) / 2) - 12), H = 150;
+  const P = { l: 44, r: 10, t: 12, b: 22 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b, n = h.length;
+  const step = iw / n;
+  const xc = (i) => P.l + step * (i + 0.5);
+  const days = h.map((d, i) => (n <= 10 || i % Math.ceil(n / 8) === 0 || i === n - 1)
+    ? `<text x="${xc(i)}" y="${H - 6}" text-anchor="middle" class="ch-ax">${d.day}</text>` : "").join("");
+  const grid = (y, label) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" class="ch-grid"/>
+    <text x="${P.l - 6}" y="${y + 3}" text-anchor="end" class="ch-ax">${label}</text>`;
+
+  // 1) foydalanuvchilar — maydonli chiziq
+  const maxU = Math.max(10, ...h.map((d) => d.users));
+  const yu = (v) => P.t + ih - (v / maxU) * ih;
+  const pts = h.map((d, i) => [xc(i), yu(d.users)]);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const area = `${line} L${pts[n - 1][0].toFixed(1)},${P.t + ih} L${pts[0][0].toFixed(1)},${P.t + ih} Z`;
+  const col = { green: "#3fa456", yellow: "#e8a33a", red: "#d9577a", down: "#7d241d" };
+  const dots = h.map((d, i) => `<circle cx="${pts[i][0]}" cy="${pts[i][1]}" r="${n > 20 ? 2.5 : 3.5}" fill="${col[d.status] || "#999"}" stroke="#1d1b18" stroke-width="1">
+    <title>Kun ${d.day}: ${fmt(d.users)} foydalanuvchi · p95 ${fmt(d.p95_ms)} ms · xato ${pct(d.error_rate)}</title></circle>`).join("");
+  const users = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">
+    ${grid(yu(maxU), fmt(maxU))}${grid(yu(maxU / 2), fmt(Math.round(maxU / 2)))}${grid(yu(0), "0")}
+    <path d="${area}" fill="#cfe3b2" opacity=".55"/>
+    <path d="${line}" fill="none" stroke="#1d1b18" stroke-width="2" stroke-linejoin="round"/>
+    ${dots}${days}</svg>`;
+
+  // 2) kunlik foyda — yashil/qizil ustunlar
+  const nets = h.map((d) => Math.round((d.revenue - d.cost) * 10) / 10);
+  const top = Math.max(1, ...nets), bot = Math.min(0, ...nets), span = top - bot || 1;
+  const yn = (v) => P.t + ((top - v) / span) * ih;
+  const bw = Math.max(3, Math.min(28, step * 0.7));
+  const bars = nets.map((v, i) => {
+    const y0 = yn(0), y1 = yn(v);
+    return `<rect x="${(xc(i) - bw / 2).toFixed(1)}" y="${Math.min(y0, y1).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, Math.abs(y1 - y0)).toFixed(1)}"
+      rx="2" fill="${v >= 0 ? "#3fa456" : "#d9577a"}" opacity=".85">
+      <title>Kun ${h[i].day}: daromad ${usd(h[i].revenue)} − xarajat ${usd(h[i].cost)} = ${usd(v, true)}</title></rect>`;
   }).join("");
-  const line = h.map((d, i) => `${i ? "L" : "M"}${x(i)},${H - P - (d.users / maxU) * (H - 2 * P)}`).join(" ");
-  const ref300 = H - P - (300 / 3000) * (H - 2 * P);
-  const ref1000 = H - P - (1000 / 3000) * (H - 2 * P);
-  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <line x1="${P}" x2="${W - P}" y1="${H - P}" y2="${H - P}" stroke="#c6bbac"/>
-    <line x1="${P}" x2="${W - P}" y1="${ref300}" y2="${ref300}" stroke="#e8a33a" stroke-dasharray="3 4" opacity=".7"/>
-    <line x1="${P}" x2="${W - P}" y1="${ref1000}" y2="${ref1000}" stroke="#c0392b" stroke-dasharray="3 4" opacity=".7"/>
-    ${bars}
-    <path d="${line}" fill="none" stroke="#1d1b18" stroke-width="2" vector-effect="non-scaling-stroke"/>
-    <text x="${P}" y="12" font-size="10" fill="#6f6961">foydalanuvchi (chiziq, maks ${fmt(maxU)}) · p95 (ustun, 300 ms / 1 s chiziqlar)</text>
-  </svg>`;
+  const money = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">
+    ${grid(yn(top), usd(top))}${bot < 0 ? grid(yn(bot), usd(bot)) : ""}
+    <line x1="${P.l}" x2="${W - P.r}" y1="${yn(0)}" y2="${yn(0)}" stroke="#1d1b18" stroke-width="1"/>
+    <text x="${P.l - 6}" y="${yn(0) + 3}" text-anchor="end" class="ch-ax">$0</text>
+    ${bars}${days}</svg>`;
+
+  const last = h[n - 1], sum = nets.reduce((x, y) => x + y, 0);
+  el.innerHTML = `
+    <div class="ch-box"><div class="ch-h"><b>👥 Foydalanuvchilar</b><span>${fmt(last.users)} · nuqta rangi = sayt holati</span></div>${users}</div>
+    <div class="ch-box"><div class="ch-h"><b>💵 Kunlik foyda</b><span class="${sum >= 0 ? "pos" : "neg"}">${n} kunda ${usd(sum, true)}</span></div>${money}</div>`;
 }
 
 // -------------------------------------------------------------------------

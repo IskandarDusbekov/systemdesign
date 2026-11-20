@@ -14,7 +14,8 @@ TRAFFIC = {
     "cdn": {"nginx", "lb"},
     "nginx": {"lb", "app"},
     "lb": {"app"},
-    "app": {"postgres", "pgbouncer", "replica", "redis", "worker", "media", "payment"},
+    "app": {"postgres", "pgbouncer", "replica", "redis", "worker", "media", "payment", "auth"},
+    "auth": {"redis", "postgres", "pgbouncer"},
     "worker": {"postgres", "pgbouncer", "media"},
     "pgbouncer": {"postgres"},
     "postgres": {"replica"},     # replikatsiya
@@ -26,11 +27,13 @@ TITLES = {
     "users": "Foydalanuvchilar", "server": "Server", "cdn": "CDN", "nginx": "Nginx",
     "lb": "Load Balancer", "app": "Sayt", "worker": "Fon ishchisi", "payment": "To'lov shlyuzi",
     "postgres": "PostgreSQL", "replica": "Read replica", "pgbouncer": "PgBouncer", "redis": "Redis",
-    "media": "media/", "tgbot": "Telegram bot",
+    "media": "media/", "tgbot": "Telegram bot", "auth": "Avtorizatsiya",
 }
 
 # Noto'g'ri ulanish: (sabab, real hayotda nima bo'lardi)
 WHY_NOT = {
+    ("nginx", "auth"): ("Avtorizatsiya alohida sayt emas — u Saytning bir qismi. Sayt → Avtorizatsiya torting.", ""),
+    ("users", "auth"): ("Mijoz kirish sahifasini Sayt orqali ochadi: Foydalanuvchilar → Nginx → Sayt → Avtorizatsiya.", ""),
     ("users", "postgres"): ("Foydalanuvchi bazaga to'g'ridan-to'g'ri ulanmaydi.",
                             "Baza internetga ochiladi: istalgan odam parolni terib ko'rishi, ma'lumotlarni o'g'irlashi mumkin."),
     ("users", "redis"): ("Kesh internetga ochilmaydi.",
@@ -75,6 +78,8 @@ REQUIREMENTS = {
     "media": [{"dir": "in", "kinds": ["app", "worker"], "text": "Sayt → media/ (fayllar)"}],
     "cdn": [{"dir": "in", "kinds": ["users"], "text": "Foydalanuvchilar → CDN"},
             {"dir": "out", "kinds": ["nginx", "lb"], "text": "CDN → Nginx"}],
+    "auth": [{"dir": "in", "kinds": ["app"], "text": "Sayt → Avtorizatsiya (kirish sahifasi Saytning bir qismi)"},
+             {"dir": "out", "kinds": ["redis", "postgres", "pgbouncer"], "text": "Avtorizatsiya → Redis (kodlar TTL bilan) yoki PostgreSQL"}],
     "tgbot": [{"dir": "in", "kinds": ["users"], "text": "Foydalanuvchilar → Telegram bot (xabarlar Telegram orqali keladi)"},
               {"dir": "out", "kinds": ["app", "postgres", "pgbouncer"], "text": "Telegram bot → Sayt (API) yoki PostgreSQL"}],
 }

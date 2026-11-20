@@ -102,7 +102,7 @@ STEPS = [
              "out": ["Successfully installed Django-5.2 gunicorn-23.0 psycopg-3.2"]},
             {"ask": "Baza jadvallarini yarating (migratsiya)", "cmd": "python manage.py migrate",
              "alt": [".venv/bin/python manage.py migrate", "python3 manage.py migrate"],
-             "out": ["Operations to perform: Apply all migrations", "  Applying smeta.0001_initial... OK"]},
+             "out": ["Operations to perform: Apply all migrations", "  Applying app.0001_initial... OK"]},
             {"ask": "Saytni qayta ishga tushiring", "cmd": "systemctl restart gunicorn", "alt": ["service gunicorn restart"], "out": []},
         ],
         "commands": [

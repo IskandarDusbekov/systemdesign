@@ -75,13 +75,13 @@ export function renderGrowth(state, data, actions) {
         <h2>🏆 Yutuqlar <small class="muted">${doneAch}/${g.achievements.length}</small></h2>
         <div class="gr-ach">${g.achievements.map((a) => `<span class="${a.done ? "done" : ""}">${a.done ? "🏆" : "○"} ${esc(a.title)}</span>`).join("")}</div>
         <h2>🏢 Startuplar portfeli</h2>
-        <table class="rp-table"><thead><tr><th>Startup</th><th>Biznes</th><th>Mijozlar</th><th>Hisob</th><th></th></tr></thead>
+        <table class="rp-table"><thead><tr><th>Startup</th><th>Biznes</th><th>Mijozlar</th><th>Kassa</th><th></th></tr></thead>
           <tbody>${g.portfolio.rooms.map((r) => `<tr class="${r.active ? "gr-cur" : ""}"><td><b>${esc(r.name)}</b></td>
             <td>${r.business ? esc(data.catalog.businesses[r.business].icon + " " + data.catalog.businesses[r.business].title) : "—"}</td>
-            <td>${fmt(r.users)}</td><td class="${r.coins >= 0 ? "pos" : "neg"}">${usd(r.coins)}</td>
+            <td>${fmt(r.users)}</td><td class="pos">${usd(r.kassa)}</td>
             <td>${r.active ? "<span class='muted'>hozir</span>" : `<button class="link" data-open="${r.id}">ochish</button>`}</td></tr>`).join("")}</tbody></table>
-        <div class="gr-total">Umumiy boylik: <b>${usd(g.portfolio.total)}</b></div>
-        <button class="btn primary" id="grNew">🚀 Yangi startup ochish${coins >= 300 ? " (sarmoya bilan)" : ""}</button>
+        <div class="gr-total">Umumiy balans (hamma startuplar uchun bitta): <b>${usd(g.portfolio.total)}</b></div>
+        <button class="btn primary" id="grNew">🚀 Yangi startup ochish</button>
       </div>
     </div>
   </section>`;

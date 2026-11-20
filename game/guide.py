@@ -34,8 +34,9 @@ CHAPTERS = {
                 "Tor bo'g'izni toping va yeching: worker qo'shing, server kattalashtiring, kesh, Load Balancer...",
                 "Pulni kuzating: daromad xarajatdan katta bo'lishi kerak.",
             ]},
-            {"warn": "Kassa 3 kun ketma-ket minusda bo'lsa — bankrot. Daromad yo'q paytda kunlarni ketma-ket bosmang: "
-                     "avval To'lov shlyuzini ulang (2-bob)."},
+            {"warn": "Vaqt real yuradi: 1 o'yin kuni = 20 daqiqa, siz yo'qligingizda ham. Xarajat har soat ketadi. "
+                     "Balans 0 ga tushsa — hosting serverlarni to'xtatadi: sayt ishlamaydi, mijozlar kamayadi. "
+                     "Shuning uchun daromad yo'q paytda keraksiz server va bloklarni qo'shmang."},
         ],
     },
     "first-site": {
@@ -163,7 +164,7 @@ CHAPTERS = {
             {"steps": [
                 "Fon ishchisi blokini qo'shing.",
                 "Sayt → Fon ishchisi va Fon ishchisi → PostgreSQL strelkalarini torting.",
-                "Kod → smeta/views.py → hisobot rejimini 'fonda' qiling va saqlang.",
+                "Kod → app/views.py → hisobot rejimini 'fonda' qiling va saqlang.",
             ]},
             {"p": "Endi so'rov faqat vazifani navbatga qo'yadi (50 ms), og'ir ishni Fon ishchisi bajaradi."},
             {"tip": "Navbat limitini (max_queue) qo'ying — aks holda navbat cheksiz o'sishi mumkin."},
@@ -277,12 +278,35 @@ CHAPTERS = {
         "lead": "Model — bazadagi jadval, maydon — ustun.",
         "body": [
             {"steps": [
-                "Kod → smeta/models.py ni oching. O'ngda Model quruvchi chiqadi.",
+                "Kod → app/models.py ni oching. O'ngda Model quruvchi chiqadi.",
                 "Model nomi (masalan Order) → ＋ Model. Maydonlar qo'shing: nom, tur (ForeignKey — boshqa jadvalga bog'lanish).",
-                "Saqlash · makemigrations — smeta/migrations/ da yangi fayl paydo bo'ladi.",
+                "Saqlash · makemigrations — app/migrations/ da yangi fayl paydo bo'ladi.",
                 "🚀 Deploy — migrate serverda bajariladi.",
             ]},
             {"warn": "Deploy qilmasangiz, kod bazada yo'q ustunni so'raydi — 20% so'rov 500 xato bilan qaytadi."},
+        ],
+    },
+    "auth": {
+        "title": "Avtorizatsiya: SMS / email kod (OTP)",
+        "lead": "Mijoz parol o'ylab topmaydi: telefon yoki email kiritadi, unga 6 xonali kod keladi, kodni yozadi — kirdi.",
+        "body": [
+            {"h": "Qanday ishlaydi"},
+            {"steps": [
+                "Mijoz kirish sahifasida telefon (+998...) yoki email yozadi.",
+                "Sayt 6 xonali tasodifiy kod yaratadi va Redis'ga yozadi: otp:+99890... = 482913, 5 daqiqa (TTL).",
+                "Kod SMS provayder (masalan Eskiz) yoki email (SMTP) orqali yuboriladi.",
+                "Mijoz kodni yozadi → Sayt Redis'dagi kod bilan solishtiradi → to'g'ri bo'lsa sessiya ochiladi.",
+                "Kod bir martalik: ishlatilgach o'chiriladi. 5 marta xato — bloklanadi.",
+            ]},
+            {"h": "O'yinda"},
+            {"steps": [
+                "Asboblar panelidan 'Avtorizatsiya' ni doskaga qo'ying (Ilova qatlami).",
+                "Strelkalar: Sayt → Avtorizatsiya → Redis (yoki PostgreSQL).",
+                "Inspektorda usulni tanlang: email (bepul) yoki SMS ($0.02 / kod).",
+                "Kod → accounts/views.py va templates/auth/login.html paydo bo'ladi — o'qib chiqing.",
+            ]},
+            {"tip": "Akkaunt bo'lsa mijozlar qaytib keladi: sotuv +10%. Lekin SMS har kuni pul oladi: 1000 mijoz × 25% × $0.02 = $5/kun."},
+            {"warn": "Kodni Redis'da TTL bilan saqlang va urinishlar sonini cheklang — aks holda 6 xonali kodni ketma-ket taxmin qilib kirish mumkin."},
         ],
     },
     "business": {

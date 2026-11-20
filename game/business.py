@@ -16,9 +16,11 @@ taxminan  tannarx + ref / k  atrofida — o'yinchi buni o'zi topadi.
 import math
 
 MAX_OFFERS = 6
+MAX_DEMAND = 2.0     # barcha kampaniya/imkoniyatlar birga ham sotuvni 2× dan oshirmaydi
 
 BUSINESSES = {
     "shop": {
+        "market": 25000,
         "title": "Onlayn do'kon", "icon": "🛒", "site_name": "Do'kon",
         "pitch": "Kiyim va poyabzal sotasiz. Har sotuvdan foyda: narx − tannarx.",
         "learn": "To'lov va baza yozuvlari ko'p, bayram kunlari trafik sakraydi.",
@@ -31,6 +33,7 @@ BUSINESSES = {
         ],
     },
     "news": {
+        "market": 60000,
         "title": "Yangiliklar sayti", "icon": "📰", "site_name": "Yangiliklar",
         "pitch": "Har ko'rishdan reklama puli keladi (to'lov shlyuzisiz ham). Premium obuna — qo'shimcha.",
         "learn": "O'qish juda ko'p — Redis kesh va CDN katta farq qiladi. Mijozlar tez ko'payadi.",
@@ -41,6 +44,7 @@ BUSINESSES = {
         ],
     },
     "saas": {
+        "market": 15000,
         "title": "Onlayn xizmat (SaaS)", "icon": "📋", "site_name": "Xizmat",
         "pitch": "Mijozlar oylik tarif to'laydi. Barqaror daromad, lekin sifat past bo'lsa — ketishadi.",
         "learn": "Fon ishchilari (PDF, eslatmalar), xavfsizlik va zaxira nusxa muhim.",
@@ -52,6 +56,7 @@ BUSINESSES = {
         ],
     },
     "delivery": {
+        "market": 30000,
         "title": "Ovqat yetkazib berish", "icon": "🍔", "site_name": "Yetkazib berish",
         "pitch": "Ko'p kichik buyurtmalar. Telegram bot orqali buyurtma — mijozlar 2 baravar tez ko'payadi.",
         "learn": "Tushlik paytida yuklama keskin oshadi, tezlik muhim: sekin sayt — buyurtma yo'q.",
@@ -118,7 +123,7 @@ def sales(key, offers, users, error_rate, payment_ok, live, demand=1.0):
     rows, revenue, cogs, orders = [], 0.0, 0.0, 0.0
     for o in offers:
         f = demand_factor(o, biz["k"])
-        qty_raw = users * o["rate"] * f * demand * ok if live else 0.0
+        qty_raw = users * o["rate"] * f * min(demand, MAX_DEMAND) * ok if live else 0.0
         per = 1 / 30 if biz["unit"] == "oy" else 1.0      # oylik tarif — kuniga 1/30
         paid = qty_raw if payment_ok else 0.0
         rev, cg = paid * o["price"] * per, paid * o["cost"] * per
@@ -130,6 +135,14 @@ def sales(key, offers, users, error_rate, payment_ok, live, demand=1.0):
         cogs += cg
         orders += paid
     ads = round(users * biz["ads"] * ok, 1) if live else 0.0
+    # mahsulotlar ko'paysa — xaridorlar ular orasida bo'linadi (cheksiz boyib ketmaslik uchun)
+    base_n = len(biz["offers"])
+    if len(offers) > base_n:
+        share = (base_n + 0.5 * (len(offers) - base_n)) / len(offers)
+        for row in rows:
+            for k in ("qty", "paid", "revenue", "profit"):
+                row[k] = round(row[k] * share, 1)
+        revenue, cogs, orders = revenue * share, cogs * share, orders * share
     return {"rows": rows, "revenue": round(revenue, 1), "cogs": round(cogs, 1), "ads": ads,
             "orders": round(orders), "unit": biz["unit"], "lost": not payment_ok and live}
 

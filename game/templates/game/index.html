@@ -19,6 +19,13 @@
       <span class="brand-name">Vallum</span>
       <span class="brand-tag">Poligon</span>
     </div>
+    <div class="rooms" id="rooms"></div>
+    <div class="top-actions">
+      <div class="balance" id="balance"></div>
+      <span class="day-chip" id="dayChip" title="O'yin vaqti real vaqtda yuradi: 1 kun = 20 daqiqa. Siz yo'qligingizda ham hisoblanadi.">Kun 1 · 08:00</span>
+      <button class="btn ghost" id="btnTour" title="Yo'riqnoma: nima qayerda, nima qilish kerak">🎓<span class="hide-sm"> Yo'riqnoma</span></button>
+      <button class="btn ghost" id="btnReset" title="Startupni boshidan">↺</button>
+    </div>
     <nav class="tabs" id="tabs">
       <button data-tab="board" class="tab active">▦ Doska</button>
       <button data-tab="site" class="tab">🌐 Sayt</button>
@@ -28,15 +35,6 @@
       <button data-tab="git" class="tab">⎇ Git</button>
       <button data-tab="guide" class="tab">📖 Qo'llanma</button>
     </nav>
-    <div class="rooms" id="rooms"></div>
-    <div class="top-actions">
-      <div class="balance" id="balance"></div>
-      <span class="day-chip" id="dayChip">Kun 1</span>
-      <button class="btn" id="btnPlay" title="Har soniyada 1 kun">▶ Boshlash</button>
-      <button class="btn" id="btnDay">+1 kun</button>
-      <button class="btn" id="btnWeek">+7 kun</button>
-      <button class="btn ghost" id="btnReset" title="Xonani boshidan">↺</button>
-    </div>
   </header>
 
   <!-- ============ HOLAT QATORI ============ -->
@@ -50,7 +48,7 @@
         <div class="board-head">
           <div>
             <div class="eyebrow" id="scenarioTitle"></div>
-            <h1 id="roomTitle">serverxona</h1>
+            <h1 id="roomTitle">startup</h1>
           </div>
           <div class="board-hint">Blokni sudrang · <b>●</b> nuqtadan strelka torting · bosing — sozlamalar · Delete — o'chirish.<br>Har bir xizmat bitta <b>Server</b> ichida ishlaydi — rangli yorliq qaysi serverda ekanini ko'rsatadi.</div>
         </div>
@@ -59,17 +57,20 @@
           <svg class="edges" id="edges"></svg>
           <div class="nodes" id="nodes"></div>
         </div>
-        <div class="legend">
+        <div class="legend" id="legend">
+          <span class="lg-h">Blok:</span>
           <span><i class="dot g"></i> bemalol</span>
           <span><i class="dot y"></i> band 70%+</span>
           <span><i class="dot r"></i> sig'maydi</span>
           <span><i class="dot off"></i> ishlamayapti</span>
-          <span class="muted">harakatlanuvchi nuqtalar — so'rovlar oqimi</span>
+          <span class="lg-sep"></span>
+          <span class="lg-h">Oqim (harakatlanuvchi nuqta):</span>
+          <span id="legendFlows"></span>
         </div>
       </div>
       <div class="bottom card">
         <div class="bottom-head">
-          <span class="eyebrow">Kunlik grafik · foydalanuvchilar va javob vaqti (p95)</span>
+          <span class="eyebrow">📈 Kunlik natijalar</span>
           <span class="muted" id="econLine"></span>
         </div>
         <div id="chart" class="chart"></div>

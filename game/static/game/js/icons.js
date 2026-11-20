@@ -127,6 +127,14 @@ const SHAPES = {
       `<ellipse cx="52" cy="32" rx="18" ry="7" fill="#f4ebe0" ${S}/>` +
       `<g transform="translate(52 31) scale(.8 .45)">${GLYPHS.pool}</g>`);
   },
+  // Avtorizatsiya — qulf: quti ustida halqa
+  lock(c) {
+    return wrap(shadow(52, 66, 34, 9) +
+      `<path d="M38 30 V20 A14 14 0 0 1 66 20 V30" fill="none" stroke="${INK}" stroke-width="5" stroke-linecap="round"/>
+       <path d="M38 30 V20 A14 14 0 0 1 66 20 V30" fill="none" stroke="#d9d2c5" stroke-width="2.4" stroke-linecap="round"/>` +
+      box(52, 34, 26, 22, c) +
+      `<circle cx="42" cy="50" r="3" fill="${INK}"/><path d="M42 52 L42 58" stroke="${INK}" stroke-width="2.2" stroke-linecap="round"/>`);
+  },
   // media/ — papka
   folder(c) {
     return wrap(shadow() + box(40, 26, 18, 6, shade(c, 0.05)) + box(52, 36, 40, 16, c));

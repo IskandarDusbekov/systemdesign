@@ -15,7 +15,10 @@ import difflib
 import hashlib
 import random
 
+from datetime import datetime, timedelta
+
 from django.db import transaction
+from django.utils import timezone
 
 import re
 
@@ -83,22 +86,20 @@ def ensure_scenario_payment(room):
 
 
 @transaction.atomic
-def create_room(kind, name=None, biz=None, invest=0):
-    start = scenario.SCENARIO_START if kind == "scenario" else scenario.SANDBOX_START
-    invest = max(0, int(invest or 0))
-    if invest:
-        # yangi startupga hozirgi startup hisobidan sarmoya
-        src = Room.objects.filter(active=True).first()
-        if not src or src.coins < invest:
-            raise GameError(f"Sarmoya uchun ${invest} kerak, hozirgi startupda ${src.coins if src else 0:.0f}.")
-        src.coins = round(src.coins - invest, 1)
-        src.save(update_fields=["coins"])
+def create_room(kind, name=None, biz=None, invest=0, coins=None):
+    """Yangi startup. Balans umumiy: yangi startup yangi pul bermaydi — hamma xarajat bitta hamyondan."""
+    start = (scenario.SCENARIO_START if kind == "scenario" else
+             scenario.STARTER_START if kind == "starter" else scenario.SANDBOX_START)
+    other = Room.objects.order_by("id").first()
+    if coins is None:
+        coins = other.coins if other else start["coins"]
     Room.objects.update(active=False)
     room = Room.objects.create(
         name=(name or start["name"]).strip()[:80] or start["name"], kind=start["kind"], active=True,
-        users=start["users"], coins=start["coins"] + invest, power_limit_w=start["power_limit_w"],
+        users=start["users"], coins=coins, power_limit_w=start["power_limit_w"],
         seed=random.randint(1, 10_000), code=catalog.default_code(), env=catalog.new_env(),
         flags={"version": LAYOUT_VERSION, "max_users": start["users"], "launch": {},
+               "last_tick": timezone.now().isoformat(), "hour": 8,
                "business": "saas" if kind == "scenario" else (biz if biz in business.BUSINESSES else "shop")},
         schema=project.default_schema(start["kind"]),
     )
@@ -133,7 +134,7 @@ def create_room(kind, name=None, biz=None, invest=0):
     if room.kind == "scenario":
         _commit(room, "env qo'shildi", ".env", [], file_lines(room, ".env"))
         for mig in room.schema["migrations"]:
-            _commit(room, f"makemigrations: {mig['name']}", f"smeta/migrations/{mig['name']}.py", [], mig["lines"])
+            _commit(room, f"makemigrations: {mig['name']}", f"app/migrations/{mig['name']}.py", [], mig["lines"])
     return room
 
 
@@ -149,6 +150,7 @@ def switch_room(room_id):
     Room.objects.update(active=False)
     room.active = True
     room.save(update_fields=["active"])
+    sync(room)
     return room
 
 
@@ -167,9 +169,9 @@ def delete_room(room):
 
 
 def reset_room(room):
-    kind, name, biz = room.kind, room.name, business_of(room)
+    kind, name, biz, coins = room.kind, room.name, business_of(room), room.coins
     room.delete()
-    return create_room(kind, name, biz)
+    return create_room(kind, name, biz, coins=coins)      # balans umumiy — qayta boshlash pul bermaydi
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +236,11 @@ def layout_of(room):
     biz = business.BUSINESSES[key]
     mods = growth.modifiers(room.flags or {})
     la.update(business=key, offers=offers_of(room), traffic=biz["traffic"] * mods["traffic"],
-              growth=biz["growth"] + mods["growth"], bot_growth=biz["bot_growth"], demand=mods["demand"])
+              growth=biz["growth"] + mods["growth"], bot_growth=biz["bot_growth"], demand=mods["demand"],
+              market=biz["market"], suspended=bool((room.flags or {}).get("suspended")),
+              neglected=bool((room.flags or {}).get("neglected")),
+              sms="sms" in (room.flags or {}).get("upgrades", []),
+              db_load=project.db_load(schema.get("models", [])))
     return engine.Layout(power_limit_w=room.power_limit_w, blocks=blocks, edges=edges,
                          hosts=hosts, code=room.code, env=room.env, launch=la)
 
@@ -259,11 +265,16 @@ def code_context(room):
         "repo": la.get("repo") or f"men/{slug}",
         "server_ip": srv.ip if srv else "0.0.0.0",
         "has_worker": "worker" in kinds, "has_redis": "redis" in kinds, "has_bot": "tgbot" in kinds,
+        "has_auth": "auth" in kinds,
+        "auth_method": (room.blocks.filter(kind="auth").first().config.get("method", "email")
+                        if "auth" in kinds else "email"),
+        "auth_placeholder": ("+998 90 123 45 67" if "auth" in kinds and
+                             room.blocks.filter(kind="auth").first().config.get("method") == "sms" else "email@misol.uz"),
         "has_payment": "payment" in kinds, "has_replica": "replica" in kinds, "has_pgbouncer": "pgbouncer" in kinds,
         "bot_mode": bot.config.get("mode", "polling") if bot else "polling",
         "bot_webhook": bool(bot and bot.config.get("mode") == "webhook"),
         "models_code": project.models_code(models),
-        "admin_code": project.admin_code(models),
+        "admin_code": project.admin_code(models, (room.schema or {}).get("admin")),
     }
 
 
@@ -304,8 +315,6 @@ def _fits(room, kind, config, host, exclude_id=None):
     if kind == "server":
         lay.hosts[tmp] = {"tier": config.get("tier"), "config": config}
     res = engine.resources(lay)
-    if res["power_used"] > res["power_limit"]:
-        return False, f"Elektr yetmaydi: {res['power_used']} / {res['power_limit']} W. Limitni oshiring."
     if host:
         h = res["hosts"][host.id]
         if h["over_cpu"] or h["over_ram"]:
@@ -528,6 +537,150 @@ def rotate_env(room, key=None):
 # ---------------------------------------------------------------------------
 # Elektr va kunlar
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Real vaqt: har so'rovda o'tgan vaqt hisoblanadi (o'yinchi yo'qligida ham)
+# ---------------------------------------------------------------------------
+HOUR_SECONDS = engine.GAME_DAY_SECONDS / engine.HOURS
+STATUS_RANK = {"green": 0, "yellow": 1, "red": 2, "down": 3}
+
+
+def sync(room, now=None):
+    """Oxirgi hisobdan beri o'tgan o'yin soatlarini qo'llaydi. Uzoq yo'qlik — xulosa (room._away)."""
+    now = now or timezone.now()
+    flags = dict(room.flags or {})
+    last = flags.get("last_tick")
+    room._events, room._away = [], None
+    if not last:
+        flags["last_tick"] = now.isoformat()
+        room.flags = flags
+        room.save(update_fields=["flags"])
+        return
+    last_dt = datetime.fromisoformat(last)
+    hours = int((now - last_dt).total_seconds() // HOUR_SECONDS)
+    if hours <= 0:
+        return
+    cap = engine.MAX_CATCHUP_DAYS * engine.HOURS
+    summary = advance_hours(room, min(hours, cap), neglect_after=engine.OWNER_AWAY_DAYS * engine.HOURS)
+    flags = dict(room.flags)
+    flags["last_tick"] = (now if hours > cap else last_dt + timedelta(seconds=hours * HOUR_SECONDS)).isoformat()
+    room.flags = flags
+    room.save(update_fields=["flags"])
+    room._events = summary["events"]
+    if hours >= 3:                         # 3 o'yin soatidan ko'p — "siz yo'qligingizda" oynasi
+        summary["capped"] = hours > cap
+        room._away = summary
+
+
+def advance_hours(room, n, neglect_after=None):
+    """n o'yin soati: soatma-soat pul va mijozlar, kun oxirida tarix, hodisalar."""
+    flags = dict(room.flags or {})
+    users_f = float(flags.get("users_f") or room.users)
+    if abs(users_f - room.users) > 1:
+        users_f = float(room.users)
+    hour = int(flags.get("hour", 0))
+    acc = dict(flags.get("acc") or {})
+    start = {"users": room.users, "coins": room.coins, "day": room.day, "hour": hour}
+    kassa = float(flags.get("kassa", 0))
+    floor = min(room.users, 10)
+    events, tot_rev, tot_cost, suspended_at = [], 0.0, 0.0, None
+    lay = layout_of(room)
+    m = None
+    for i in range(n):
+        if neglect_after is not None and i >= neglect_after and not room.flags.get("neglected") \
+                and (room.flags.get("launch") or {}).get("deployed"):
+            # egasi uzoq kirmadi: yangilanish, sertifikat, disk — hech kim qaramadi → sayt to'xtadi
+            room.flags = {**room.flags, "neglected": True}
+            events.append(f"⚠ Siz {engine.OWNER_AWAY_DAYS} kundan beri kirmadingiz (Kun {room.day}, {hour:02d}:00): "
+                          "sayt to'xtab qoldi — hech kim tekshirmadi. Server ijarasi esa to'lanib turibdi. Qayta ishga tushiring.")
+            lay = layout_of(room)
+        suspended = bool(room.flags.get("suspended"))
+        m = engine.evaluate(lay, round(users_f), traffic_factor=engine.traffic_factor_for(room.seed, room.day))
+        h = engine.hour_step(lay, users_f, m, suspended)
+        users_f = h["users"]
+        # mijoz to'lovlari To'lov shlyuzi kassasida yig'iladi — egasi yechib olmaguncha balansga tushmaydi
+        kassa += h["sales"]
+        room.coins = round(room.coins + h["revenue"] - h["sales"] - h["cost"], 2)
+        tot_rev += h["revenue"]
+        tot_cost += h["cost"]
+        for k in ("revenue", "cost", "orders", "cogs", "ads"):
+            acc[k] = acc.get(k, 0) + h[k]
+        acc["p95"] = max(acc.get("p95", 0), m["p95_ms"])
+        acc["err"] = max(acc.get("err", 0), m["error_rate"])
+        if STATUS_RANK[m["status"]] >= STATUS_RANK.get(acc.get("status", "green"), 0):
+            acc["status"] = m["status"]
+        if room.coins < 0 and not suspended:
+            # bankrot o'rniga: hosting serverlarni to'xtatadi, qarz o'smaydi
+            room.coins = 0.0
+            suspended_at = f"Kun {room.day}, {hour:02d}:00"
+            room.flags = {**room.flags, "suspended": True, "suspended_at": suspended_at}
+            events.append(f"⛔ Balans tugadi ({suspended_at}): hosting serverlarni to'xtatdi. Sayt ishlamayapti, "
+                          "lekin xarajat ham to'xtadi. Xarajatni kamaytiring va serverlarni qayta yoqing.")
+            lay = layout_of(room)
+        hour += 1
+        if hour >= engine.HOURS:
+            hour = 0
+            entry = {"day": room.day, "users": round(users_f), "p95_ms": round(acc.get("p95", 0)),
+                     "error_rate": round(acc.get("err", 0), 4), "status": acc.get("status", "green"),
+                     "revenue": round(acc.get("revenue", 0), 1), "cost": round(acc.get("cost", 0), 1),
+                     "coins": round(room.coins, 1), "bottleneck": m["bottleneck_kind"],
+                     "orders": round(acc.get("orders", 0)), "cogs": round(acc.get("cogs", 0), 1),
+                     "ads": round(acc.get("ads", 0), 1)}
+            room.history = (room.history + [entry])[-60:]
+            room.day += 1
+            room.users = max(floor, round(users_f))
+            fl = dict(room.flags)
+            fl["max_users"] = max(fl.get("max_users", 0), room.users)
+            if entry["revenue"] > 0:
+                fl["paid_once"] = True
+            fl["max_coins"] = max(fl.get("max_coins", 0), room.coins)
+            fl["max_net"] = max(fl.get("max_net", 0), round(entry["revenue"] - entry["cost"], 1))
+            room.flags = fl
+            before = room.users
+            events += _advance_effects(room, m)
+            if room.users != before:          # hodisa mijozlarni kamaytirdi
+                users_f = float(room.users)
+            acc = {}
+            lay = layout_of(room)
+    room.users = max(floor, round(users_f))
+    room.neg_streak = 0
+    room.flags = {**room.flags, "users_f": users_f, "hour": hour, "acc": acc, "kassa": round(kassa, 2)}
+    room.save()
+    return {"hours": n, "from": start, "to": {"users": room.users, "coins": room.coins, "day": room.day, "hour": hour},
+            "revenue": round(tot_rev, 1), "cost": round(tot_cost, 1), "net": round(tot_rev - tot_cost, 1),
+            "events": events, "suspended_at": suspended_at,
+            "kassa": round(kassa - float(flags.get("kassa", 0)), 1)}
+
+
+@transaction.atomic
+def withdraw(room):
+    """To'lov shlyuzi kassasidagi pulni balansga yechib olish."""
+    kassa = float((room.flags or {}).get("kassa", 0))
+    if kassa < 0.01:
+        raise GameError("Kassa bo'sh — hali to'lov tushmagan.",
+                        "Mijozlar xarid qilganda pul avval To'lov shlyuzida (Payme/Click/Stripe) yig'iladi.")
+    room.coins = round(room.coins + kassa, 2)
+    room.flags = {**room.flags, "kassa": 0}
+    room.save(update_fields=["coins", "flags"])
+    return f"Kassadan ${kassa:.2f} balansga yechib olindi"
+
+
+@transaction.atomic
+def resume(room):
+    """To'xtatilgan serverlarni qayta yoqish."""
+    if not (room.flags or {}).get("suspended") and not (room.flags or {}).get("neglected"):
+        raise GameError("Serverlar allaqachon ishlayapti.")
+    room.flags = {**room.flags, "suspended": False, "neglected": False}
+    room.save(update_fields=["flags"])
+    lay = layout_of(room)
+    m = engine.evaluate(lay, room.users, traffic_factor=engine.traffic_factor_for(room.seed, room.day))
+    f = engine.finance(lay, room.users, m, room.coins)
+    if f["net"] < 0:
+        hours = int(room.coins / (-f["net"] / engine.HOURS)) if room.coins > 0 else 0
+        return (f"Serverlar yoqildi, lekin zarar: {f['net']:+.1f}$/kun — balans taxminan {hours} o'yin soatida yana tugaydi. "
+                "Server turini kichraytiring yoki keraksiz bloklarni o'chiring.")
+    return f"Serverlar yoqildi ✓ Sof foyda: +${f['net']:.1f}/kun"
+
+
 def _advance_effects(room, m):
     """Kun yakuni: kampaniya va hodisalar muddati, yangi tasodifiy hodisa."""
     flags = dict(room.flags)
@@ -622,8 +775,9 @@ def growth_state(room):
         "campaigns": f.get("campaigns", []), "upgrades": f.get("upgrades", []), "effects": f.get("effects", []),
         "event_log": f.get("event_log", []), "mods": growth.modifiers(f),
         "achievements": growth.achievements(room, f),
-        "portfolio": {"total": round(sum(r["coins"] for r in rooms), 1),
-                      "rooms": [{"id": r["id"], "name": r["name"], "coins": r["coins"], "users": r["users"],
+        "portfolio": {"total": round(room.coins, 1),
+                      "rooms": [{"id": r["id"], "name": r["name"], "kassa": round(float((r["flags"] or {}).get("kassa", 0)), 1),
+                                 "users": r["users"],
                                  "business": (r["flags"] or {}).get("business") or "", "active": r["id"] == room.id}
                                 for r in rooms]},
     }
@@ -639,30 +793,9 @@ def upgrade_power(room):
 
 @transaction.atomic
 def tick(room, days=1):
+    """Vaqtni qo'lda surish (faqat testlar uchun): n kun = n×24 o'yin soati."""
     days = max(1, min(30, int(days)))
-    if room.neg_streak >= engine.BANKRUPT_DAYS:
-        raise GameError("Startup bankrot bo'lgan — kun o'tkazib bo'lmaydi. ↺ bilan xonani qaytadan boshlang.",
-                        "Real hayotda: hosting to'lanmagani uchun serverlar o'chiriladi, domen muddati tugaydi.")
-    events = []
-    for _ in range(days):
-        lay = layout_of(room)          # har kuni qaytadan: kampaniya / hodisa ta'siri o'zgaradi
-        r = engine.advance_day(lay, room.users, room.coins, room.neg_streak, room.seed, room.day)
-        room.history = (room.history + [r["entry"]])[-60:]
-        room.users, room.coins, room.neg_streak = r["users"], r["coins"], r["neg_streak"]
-        room.day += 1
-        flags = dict(room.flags)
-        flags["max_users"] = max(flags.get("max_users", 0), room.users)
-        if r["entry"]["revenue"] > 0:
-            flags["paid_once"] = True
-        flags["max_coins"] = max(flags.get("max_coins", 0), room.coins)
-        flags["max_net"] = max(flags.get("max_net", 0), round(r["entry"]["revenue"] - r["entry"]["cost"], 1))
-        room.flags = flags
-        events += _advance_effects(room, r["metrics"])
-        if r["bankrupt"]:
-            events.append("Bankrot! 3 kun ketma-ket minusda. Xonani qaytadan boshlang.")
-            break
-    room.save()
-    return events
+    return advance_hours(room, days * engine.HOURS)["events"]
 
 
 # ---------------------------------------------------------------------------
@@ -729,10 +862,14 @@ def launch_step(room, step, data):
         if schema.get("migrations"):
             schema["applied"] = schema["migrations"][-1]["name"]
         room.schema = schema
+        first = not la.get("deployed")
         la["deployed"] = True
+        if first and room.users < 50:
+            room.users = 50
+            room.flags = {**room.flags, "users_f": float(50)}
         hosts = sorted({a.host.ip for a in apps})
         _commit(room, f"deploy: git pull + migrate + restart gunicorn ({', '.join(hosts)})", "deploy/deploy.sh", [], [])
-        msg = "Deploy qilindi: kod serverda, migratsiyalar qo'llandi"
+        msg = "Deploy qilindi: kod serverda, migratsiyalar qo'llandi" + (" · 🎉 birinchi 50 foydalanuvchi keldi!" if first else "")
     elif step == "ssl":
         if not la.get("domain"):
             raise GameError("SSL sertifikat domenga beriladi — avval domen oling.")
@@ -766,19 +903,53 @@ def save_models(room, models):
         return None
     room.schema = schema
     room.save(update_fields=["schema"])
-    _commit(room, "smeta/models.py tahrirlandi", "smeta/models.py", old_code, project.models_code(clean))
-    _commit(room, f"makemigrations: {mig}", f"smeta/migrations/{mig}.py", [], schema["migrations"][-1]["lines"])
+    _commit(room, "app/models.py tahrirlandi", "app/models.py", old_code, project.models_code(clean))
+    _commit(room, f"makemigrations: {mig}", f"app/migrations/{mig}.py", [], schema["migrations"][-1]["lines"])
     return mig
+
+
+@transaction.atomic
+def save_admin(room, raw):
+    """Django admin sozlamalari (list_display, search_fields, list_filter) → app/admin.py."""
+    schema = dict(room.schema or {})
+    models = schema.get("models", [])
+    if not models:
+        raise GameError("Avval model yarating (Kod → app/models.py) — adminda ko'rsatadigan jadval yo'q.")
+    old = project.admin_code(models, schema.get("admin"))
+    schema["admin"] = project.clean_admin(models, raw)
+    new = project.admin_code(models, schema["admin"])
+    if new == old:
+        return "O'zgarish yo'q"
+    room.schema = schema
+    room.save(update_fields=["schema"])
+    _commit(room, "app/admin.py: admin panel sozlandi", "app/admin.py", old, new)
+    return "Admin panel sozlandi · app/admin.py yangilandi (deploydan keyin serverda ko'rinadi)"
 
 
 # ---------------------------------------------------------------------------
 # Brauzerga yuboriladigan holat
 # ---------------------------------------------------------------------------
+def _finance_if_running(room, lay, m):
+    """Moliya. Hosting to'xtagan bo'lsa — qayta yoqilganda qanday bo'lishini ko'rsatamiz."""
+    if not lay.launch.get("suspended") and not lay.launch.get("neglected"):
+        return engine.finance(lay, room.users, m, room.coins)
+    lay2 = engine.Layout(power_limit_w=lay.power_limit_w, blocks=lay.blocks, edges=lay.edges, hosts=lay.hosts,
+                         code=lay.code, env=lay.env, launch={**lay.launch, "suspended": False, "neglected": False})
+    m2 = engine.evaluate(lay2, room.users, traffic_factor=engine.traffic_factor_for(room.seed, room.day))
+    return {**engine.finance(lay2, room.users, m2, room.coins), "projected": True}
+
+
 def snapshot(room):
     lay = layout_of(room)
     m = engine.evaluate(lay, room.users, traffic_factor=engine.traffic_factor_for(room.seed, room.day))
     cost, rent, power_cost = engine.daily_cost(lay)
     names = {b.id: b for b in room.blocks.all()}
+    if not lay.launch.get("deployed") and m["status"] in ("down", "red"):
+        m["status"], m["status_title"] = "idle", "Hali ishga tushmagan"
+    kassa = float((room.flags or {}).get("kassa", 0))
+    pay = next((b for b in names.values() if b.kind == "payment"), None)
+    if pay and kassa >= 1:
+        m["labels"][pay.id] = f"💰 kassa ${kassa:,.0f}"
     blocks = []
     for b in names.values():
         host = names.get(b.host_id)
@@ -799,7 +970,21 @@ def snapshot(room):
                         for c in room.connections.all()],
         "metrics": m,
         "cost": {"total": cost, "rent": rent, "power": power_cost},
-        "finance": engine.finance(lay, room.users, m, room.coins),
+        "finance": _finance_if_running(room, lay, m),
+        "clock": {"day": room.day, "hour": (room.flags or {}).get("hour", 0),
+                  "game_day_seconds": engine.GAME_DAY_SECONDS, "hour_seconds": HOUR_SECONDS,
+                  "last_tick": (room.flags or {}).get("last_tick")},
+        "suspended": bool((room.flags or {}).get("suspended")),
+        "neglected": bool((room.flags or {}).get("neglected")),
+        "kassa": round(float((room.flags or {}).get("kassa", 0)), 2),
+        "admin": project.clean_admin((room.schema or {}).get("models", []), (room.schema or {}).get("admin")),
+        "suspended_at": (room.flags or {}).get("suspended_at"),
+        "away": getattr(room, "_away", None),
+        "sync_events": getattr(room, "_events", []),
+        "model_limits": {"models": project.MAX_MODELS, "fields": project.MAX_FIELDS,
+                         "total": project.MAX_TOTAL_FIELDS, "fk": project.MAX_FK,
+                         "db_load": project.db_load((room.schema or {}).get("models", []))},
+        "model_templates": project.TEMPLATES.get(business_of(room), []),
         "business": {"key": business_of(room), "offers": offers_of(room)},
         "growth": growth_state(room),
         "advice": engine.advise(lay, m, room.users),
@@ -812,7 +997,7 @@ def snapshot(room):
         "ctx": code_context(room),
         "schema": room.schema,
         "files": [f["path"] for f in project.visible_files(_values(room), room.schema or {})],
-        "migrations": {f"smeta/migrations/{m['name']}.py": m["lines"] for m in (room.schema or {}).get("migrations", [])},
+        "migrations": {f"app/migrations/{m['name']}.py": m["lines"] for m in (room.schema or {}).get("migrations", [])},
         "launch": launch_state(room, lay),
     }
 

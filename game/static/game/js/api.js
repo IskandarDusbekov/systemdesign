@@ -54,7 +54,9 @@ export const api = {
   offers: (offers) => call("POST", "/api/offers", { offers }),
   launch: (step, data) => call("POST", `/api/launch/${step}`, data || {}),
   // vaqt va resurs
-  tick: (days) => call("POST", "/api/tick", { days }),
+  resume: () => call("POST", "/api/resume"),
+  withdraw: () => call("POST", "/api/withdraw"),
+  saveAdmin: (admin) => call("POST", "/api/admin", { admin }),
   power: () => call("POST", "/api/power"),
   reset: () => call("POST", "/api/reset"),
 };

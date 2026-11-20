@@ -17,8 +17,10 @@ holatini (snapshot) qaytaradi — brauzer shunchaki qayta chizadi.
     POST   /api/code                  {debug, ...}          sayt kodi sozlamalari
     POST   /api/rotate                {key?}                .env sirini almashtirish
     POST   /api/launch/<step>         {...}                 🚀 domen / github / deploy / ssl
+    POST   /api/admin                 {admin: {...}}        Django admin sozlamalari
     POST   /api/models                {models: [...]}       Django modellari (makemigrations)
-    POST   /api/tick                  {days}                kun o'tkazish
+    POST   /api/withdraw                                    kassadan pulni balansga yechish
+    POST   /api/resume                                      to'xtatilgan serverlarni qayta yoqish
     POST   /api/offers                {offers: [...]}       mahsulotlar va narxlar
     POST   /api/growth                {kind, id}            reklama kampaniyasi / yangi imkoniyat
     POST   /api/power                                       elektr limitini oshirish
@@ -61,6 +63,7 @@ def api(view):
     """Har bir API funksiyasini o'raydi: xonani topadi, o'yin xatolarini chiroyli qaytaradi."""
     def wrapper(request, *args, **kwargs):
         room = services.get_room()
+        services.sync(room)               # o'tgan real vaqtni hisoblaymiz
         try:
             return view(request, room, *args, **kwargs)
         except GameError as e:
@@ -80,7 +83,7 @@ def state(request, room):
 @require_http_methods(["POST"])
 def rooms(request):
     d = _body(request)
-    kind = "scenario" if d.get("kind") == "scenario" else "sandbox"
+    kind = d.get("kind") if d.get("kind") in ("scenario", "starter") else "sandbox"
     try:
         room = services.create_room(kind, d.get("name"), d.get("business"), int(d.get("invest") or 0))
     except GameError as e:
@@ -175,6 +178,13 @@ def models_view(request, room):
 
 @require_http_methods(["POST"])
 @api
+def admin_view(request, room):
+    msg = services.save_admin(room, _body(request).get("admin"))
+    return _ok(room, message=msg)
+
+
+@require_http_methods(["POST"])
+@api
 def growth_view(request, room):
     d = _body(request)
     msg = services.buy_growth(room, d.get("kind"), d.get("id"))
@@ -190,9 +200,16 @@ def offers(request, room):
 
 @require_http_methods(["POST"])
 @api
-def tick(request, room):
-    events = services.tick(room, int(_body(request).get("days", 1)))
-    return _ok(room, events=events)
+def withdraw(request, room):
+    msg = services.withdraw(room)
+    return _ok(room, message=msg)
+
+
+@require_http_methods(["POST"])
+@api
+def resume(request, room):
+    msg = services.resume(room)
+    return _ok(room, message=msg)
 
 
 @require_http_methods(["POST"])

@@ -14,11 +14,11 @@ let paused = false, filter = "all", getState = null, seq = 1040;
 const FILTERS = { all: "hammasi", err: "xatolar", money: "pul", you: "amallar" };
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-const PATHS = ["/", "/smeta/", "/smeta/42/", "/smeta/17/pdf/", "/api/items/", "/login/", "/static/app.css", "/checkout/"];
+const PATHS = ["/", "/products/", "/products/42/", "/cart/", "/api/items/", "/auth/otp/", "/static/app.css", "/media/p17.jpg", "/checkout/"];
 const NAMES = ["aziz", "dilnoza", "sardor", "malika", "jasur", "nodira", "bekzod", "kamola", "otabek", "shahlo"];
 const SLOW = {
   app: "gunicorn WARN  hamma worker band — so'rovlar navbatda turibdi",
-  postgres: "postgres WARN  sekin so'rov 1.8s: SELECT * FROM smeta_smetaitem ...",
+  postgres: "postgres WARN  sekin so'rov 1.8s: SELECT * FROM app_order JOIN app_item ...",
   nginx: "nginx WARN  worker_connections yetmayapti",
   pgbouncer: "pgbouncer WARN  ulanishlar hovuzi to'ldi",
   redis: "redis WARN  xotira to'lmoqda (maxmemory)",
@@ -38,7 +38,7 @@ export function logPush(kind, text, cls = "") {
   const room = roomId();
   if (room !== lastRoom && room !== null) {
     // xona almashdi — loglarda ajratuvchi qator
-    if (lastRoom !== null) lines.push({ t: clock(), kind: "sys", cls: "muted", text: `──── xona: ${getState().room.name} ────`, room });
+    if (lastRoom !== null) lines.push({ t: clock(), kind: "sys", cls: "muted", text: `──── startup: ${getState().room.name} ────`, room });
     lastRoom = room;
   }
   const l = { t: clock(), kind, cls, text, room };
@@ -57,7 +57,7 @@ function synth(state) {
   }
   if (m.status === "down") return ["err", `nginx  GET ${pick(PATHS)} 502 Bad Gateway — javob beradigan Sayt yo'q`, "err"];
   const r = Math.random();
-  if (L.pending_migration && r < 0.15) return ["err", `django ERROR  relation "smeta_smeta" does not exist — migrate qilinmagan`, "err"];
+  if (L.pending_migration && r < 0.15) return ["err", `django ERROR  relation "app_order" does not exist — migrate qilinmagan`, "err"];
   if (Math.random() < m.error_rate) {
     return ["err", `nginx  ${pick(["GET", "POST"])} ${pick(PATHS)} ${pick(["502", "504"])} ${Math.round(rnd(1000, 3000))}ms`, "err"];
   }

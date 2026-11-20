@@ -99,6 +99,30 @@ function curve(a, b) {
   return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`;
 }
 
+// Strelka bo'ylab nima ketyapti: maqsad blokka qarab turi, rangi va qisqa yozuvi
+export const FLOWS = {
+  http: { color: "#2f7fd8", label: "HTTP", title: "Brauzer so'rovi (sahifa ochish, xarid)" },
+  proxy: { color: "#14a39a", label: "proxy", title: "Nginx/LB so'rovni Saytga (Django) uzatadi" },
+  sql: { color: "#8a5cd1", label: "SQL", title: "Baza so'rovi: o'qish/yozish" },
+  cache: { color: "#d94848", label: "kesh", title: "Redis: tez xotiradan o'qish" },
+  pay: { color: "#2f9e44", label: "to'lov", title: "To'lov API: pul o'tkazmasi" },
+  auth: { color: "#e0a020", label: "OTP", title: "Avtorizatsiya: kod yuborish/tekshirish" },
+  task: { color: "#a0663a", label: "vazifa", title: "Fon ishchisiga og'ir vazifa (navbat)" },
+  bot: { color: "#d6589f", label: "bot", title: "Telegram bot xabarlari" },
+  file: { color: "#6b7a8f", label: "fayl", title: "Rasm/fayl (media, CDN)" },
+};
+export function flowOf(srcKind, dstKind) {
+  if (["postgres", "replica", "pgbouncer"].includes(dstKind)) return "sql";
+  if (dstKind === "redis") return "cache";
+  if (dstKind === "payment") return "pay";
+  if (dstKind === "auth") return "auth";
+  if (dstKind === "worker") return "task";
+  if (dstKind === "tgbot") return "bot";
+  if (["media", "cdn"].includes(dstKind) && srcKind !== "users") return "file";
+  if (dstKind === "app" && ["nginx", "lb"].includes(srcKind)) return "proxy";
+  return "http";
+}
+
 export function drawEdges() {
   const { state, ui } = ctx;
   const byId = new Map(state.blocks.map((b) => [b.id, b]));
@@ -110,6 +134,7 @@ export function drawEdges() {
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#34302b"/></marker></defs>`;
   let body = "";
+  const labels = [];
   state.connections.forEach((c) => {
     const s = byId.get(c.source), t = byId.get(c.target);
     if (!s || !t) return;
@@ -119,17 +144,34 @@ export function drawEdges() {
     const off = m.node_status[t.id] === "off" || m.node_status[s.id] === "off";
     const cls = ["edge", off ? "off" : u >= 1 ? "u-r" : u >= 0.7 ? "u-y" : "",
       ui.selected?.type === "edge" && ui.selected.id === c.id ? "selected" : ""].join(" ");
-    body += `<path id="e${c.id}" class="${cls}" d="${d}" marker-end="url(#arrow)"/>`;
+    const fk = flowOf(s.kind, t.kind), fl = FLOWS[fk];
+    body += `<path id="e${c.id}" class="${cls}" d="${d}" marker-end="url(#arrow)" ${off || u >= 0.7 ? "" : `style="stroke:${fl.color}"`}/>`;
+    labels.push({ id: c.id, fk, off });
     body += `<path class="edge-hit" data-edge="${c.id}" d="${d}"/>`;
     if (flowing && !off) {
       const dur = (u >= 1 ? 3.6 : u >= 0.7 ? 2.4 : 1.6).toFixed(1);
       for (let i = 0; i < dots; i++) {
-        body += `<circle class="flow-dot" r="4"><animateMotion dur="${dur}s" begin="${(i * dur / dots).toFixed(2)}s" repeatCount="indefinite"><mpath href="#e${c.id}"/></animateMotion></circle>`;
+        body += `<circle class="flow-dot" r="4.5" style="fill:${fl.color}"><title>${fl.title}</title><animateMotion dur="${dur}s" begin="${(i * dur / dots).toFixed(2)}s" repeatCount="indefinite"><mpath href="#e${c.id}"/></animateMotion></circle>`;
       }
     }
   });
   if (ui.tempEdge) body += `<path class="edge selected" d="${ui.tempEdge}" stroke-dasharray="6 4"/>`;
   $("edges").innerHTML = defs + body;
+  // strelka o'rtasida yozuv: nima ketyapti
+  const svg = $("edges");
+  let tags = "";
+  labels.forEach(({ id, fk, off }) => {
+    const p = svg.querySelector(`#e${id}`);
+    if (!p) return;
+    let pt;
+    try { pt = p.getPointAtLength(p.getTotalLength() / 2); } catch { return; }
+    const fl = FLOWS[fk];
+    const w = fl.label.length * 6.4 + 12;
+    tags += `<g class="edge-tag ${off ? "off" : ""}" transform="translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})"><title>${fl.title}</title>
+      <rect x="${-w / 2}" y="-8" width="${w}" height="16" rx="8" style="stroke:${off ? "#b9ae9f" : fl.color}"/>
+      <text y="4" text-anchor="middle" style="fill:${off ? "#8a8276" : fl.color}">${fl.label}</text></g>`;
+  });
+  svg.insertAdjacentHTML("beforeend", tags);
 }
 
 // -------------------------------------------------------------------------
@@ -221,6 +263,12 @@ export function initBoard() {
     const p = local(e);
     ctx.actions.drop(kind, Math.round((p.x - NODE_W / 2) / SNAP) * SNAP, Math.round((p.y - SHAPE_CY) / SNAP) * SNAP);
   });
+}
+
+// Doska koordinatasi (blok x/y) → ekrandagi nuqta (ko'rsatma animatsiyasi uchun)
+export function boardPoint(x, y) {
+  const b = $("board"), r = b.getBoundingClientRect();
+  return [r.left + x * zoom - b.scrollLeft, r.top + y * zoom - b.scrollTop];
 }
 
 // Bo'sh joy topish (menyuda bosilganda)

@@ -8,7 +8,7 @@ noto'g'ri ulanish sabab bilan rad etiladi, bloklar serverga joylanadi,
 
 from django.test import TestCase
 
-from . import catalog, engine, rules, services
+from . import catalog, engine, project, rules, services
 
 
 def make_layout(apps=1, workers=2, lb=False):
@@ -197,7 +197,7 @@ class ModelBuilderTests(TestCase):
             {"name": "user", "type": "ForeignKey", "to": "User"},
             {"name": "total", "type": "DecimalField"}]}])
         self.assertEqual(mig, "0001_initial")
-        code = "\n".join(services.file_lines(room, "smeta/models.py"))
+        code = "\n".join(services.file_lines(room, "app/models.py"))
         self.assertIn("class Order(models.Model):", code)
         mig2 = services.save_models(room, [{"name": "Order", "fields": [
             {"name": "user", "type": "ForeignKey", "to": "User"},
@@ -318,11 +318,119 @@ class GrowthTests(TestCase):
                 break
         self.assertGreaterEqual(room.flags.get("events_seen", 0), 1)
 
-    def test_invest_moves_money(self):
+    def test_balance_is_shared_between_startups(self):
         room = self._live()
-        new = services.create_room("sandbox", "ikkinchi", "news", 500)
+        new = services.create_room("sandbox", "ikkinchi", "news")
+        self.assertEqual(new.coins, room.coins)          # yangi startup yangi pul bermaydi
+        new.coins = 700
+        new.save(update_fields=["coins"])
         room.refresh_from_db()
-        self.assertEqual(room.coins, 1500)
-        self.assertEqual(new.coins, 1000)
+        self.assertEqual(room.coins, 700)                # bitta umumiy hamyon
+        again = services.reset_room(new)
+        self.assertEqual(again.coins, 700)
+
+
+class RealTimeTests(TestCase):
+    """Real vaqt, offlayn hisob, hosting to'xtashi, cheklovlar."""
+
+    def test_sync_applies_elapsed_hours(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        room = services.create_room("scenario")
+        coins0, day0 = room.coins, room.day
+        later = timezone.now() + timedelta(seconds=services.HOUR_SECONDS * 30)   # 30 o'yin soati
+        services.sync(room, now=later)
+        self.assertEqual(room.day, day0 + 1)
+        self.assertNotEqual(room.coins, coins0)
+        self.assertIsNotNone(room._away)
+        self.assertEqual(room._away["hours"], 30)
+
+    def test_offline_capped(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        room = services.create_room("scenario")
+        services.sync(room, now=timezone.now() + timedelta(days=30))
+        self.assertLessEqual(room.day, 1 + engine.MAX_CATCHUP_DAYS)
+        self.assertTrue(room._away["capped"])
+
+    def test_no_bankruptcy_hosting_suspends(self):
+        room = services.create_room("sandbox", "zarar", "shop")   # daromad yo'q, faqat xarajat
+        room.coins = 20
+        room.save()
+        events = services.tick(room, 5)
+        room.refresh_from_db()
+        self.assertEqual(room.coins, 0)
+        self.assertTrue(room.flags["suspended"])
+        self.assertTrue(any("Balans tugadi" in e for e in events))
+        coins = room.coins
+        services.tick(room, 2)                     # to'xtagan paytda pul ketmaydi
+        room.refresh_from_db()
+        self.assertEqual(room.coins, coins)
+        services.resume(room)
+        self.assertFalse(room.flags["suspended"])
+
+    def test_market_saturation_slows_growth(self):
+        room = services.create_room("scenario")
+        lay = services.layout_of(room)
+        m = engine.evaluate(lay, 100)
+        small = engine.daily_growth(lay, 100, m)
+        big = engine.daily_growth(lay, 14_000, m)
+        self.assertGreater(small, big)
+
+    def test_model_limits(self):
+        from . import project
+        many = [{"name": f"M{i}x", "fields": [{"name": "a", "type": "IntegerField"}]} for i in range(7)]
+        with self.assertRaises(project.SchemaError):
+            project.clean_models(many)
+        with self.assertRaises(project.SchemaError):
+            project.clean_models([{"name": "Empty", "fields": []}])
+        ok = project.clean_models(project.TEMPLATES["shop"])
+        self.assertGreater(project.db_load(ok), 1.0)
+
+    def test_starter_users_come_after_deploy_and_money_goes_to_kassa(self):
+        room = services.create_room("starter", "kassa", "shop")
+        self.assertEqual(room.users, 0)
+        srv = room.blocks.get(kind="server")
+        services.launch_step(room, "domain", {"name": "kassa.uz", "server": srv.id})
+        services.launch_step(room, "github", {"repo": "men/kassa", "public": False})
+        services.launch_step(room, "deploy", {})
+        room.refresh_from_db()
+        self.assertEqual(room.users, 50)
+        services.launch_step(room, "ssl", {})
+        room.refresh_from_db()
+        services.tick(room, 1)
+        room.refresh_from_db()
+        self.assertGreater(room.flags.get("kassa", 0), 0)       # sotuv kassaga tushdi
+        coins, kassa = room.coins, room.flags["kassa"]
+        services.withdraw(room)
+        self.assertAlmostEqual(room.coins, coins + kassa, places=1)
+        self.assertEqual(room.flags["kassa"], 0)
         with self.assertRaises(services.GameError):
-            services.create_room("sandbox", "uchinchi", "shop", 99999)
+            services.withdraw(room)
+
+    def test_sms_otp_needs_purchased_service(self):
+        lay = engine.Layout(power_limit_w=999, blocks={
+            1: {"kind": "server", "host": None, "config": {}, "name": "s"},
+            2: {"kind": "users", "host": None, "config": {}, "name": "u"},
+            3: {"kind": "app", "host": 1, "config": {}, "name": "a"},
+            4: {"kind": "auth", "host": 1, "config": {"method": "sms"}, "name": "otp"},
+            5: {"kind": "redis", "host": 1, "config": {}, "name": "r"},
+        }, edges={(2, 3), (3, 4), (4, 5)}, hosts={1: {"tier": "orta", "config": {}}},
+            code={}, env={}, launch={"sms": False})
+        self.assertFalse(engine.evaluate(lay, 50)["auth_ok"])
+        lay.launch["sms"] = True
+        self.assertTrue(engine.evaluate(lay, 50)["auth_ok"])
+
+    def test_django_admin_config_and_idle_status(self):
+        room = services.create_room("starter", "adm", "shop")
+        snap = services.snapshot(room)
+        self.assertEqual(snap["metrics"]["status"], "idle")          # ochilmagan sayt — "qulagan" emas
+        services.save_models(room, project.TEMPLATES["shop"])
+        name = project.TEMPLATES["shop"][0]["name"]
+        fields = [f["name"] for f in project.TEMPLATES["shop"][0]["fields"]]
+        msg = services.save_admin(room, {name: {"list": fields[:2], "search": ["yo'q_maydon"], "filter": []}})
+        self.assertIn("admin.py", msg)
+        code = project.admin_code(room.schema["models"], room.schema["admin"])
+        self.assertIn(f"class {name}Admin(admin.ModelAdmin):", code)
+        self.assertTrue(any("list_display" in l for l in code))
+        self.assertFalse(any("yo'q_maydon" in l for l in code))

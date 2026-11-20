@@ -35,12 +35,21 @@ LOGIN_COST_S = 0.15        # parol xeshini tekshirish
 
 # --- Iqtisod ---------------------------------------------------------------
 REVENUE_PER_USER = 0.75     # faqat To'lov shlyuzi + HTTPS bo'lsa
+AUTH_DEMAND = 1.10          # akkaunt bo'lsa mijozlar qaytib keladi: sotuv +10%
 BOT_GROWTH = 0.02           # Telegram bot ishlasa — qo'shimcha o'sish / kun
 BOT_REQ_PER_USER = 0.004
 PENDING_MIGRATION_ERR = 0.2
 GROWTH = {"green": 0.06, "yellow": 0.005, "red": -0.06, "down": -0.20}
 STATUS_TITLE = {"green": "Yaxshi", "yellow": "O'rtacha", "red": "Yomon", "down": "Qulagan"}
-BANKRUPT_DAYS = 3
+BANKRUPT_DAYS = 3            # eski: endi bankrot yo'q, balans tugasa hosting to'xtaydi
+
+# --- Vaqt: o'yin real vaqtda yuradi (o'yinchi yo'qligida ham)
+GAME_DAY_SECONDS = 20 * 60   # 1 o'yin kuni = 20 real daqiqa (1 soat ≈ 50 soniya)
+HOURS = 24
+MAX_CATCHUP_DAYS = 7         # uzoq yo'qlikda ko'pi bilan 7 kun hisoblanadi
+OWNER_AWAY_DAYS = 3          # egasi 3 o'yin kunidan ko'p kirmasa — sayt to'xtaydi (xarajat davom etadi)
+SUSPENDED_GROWTH = -0.03     # hosting to'xtagan paytda mijozlar kuniga −3%
+DEFAULT_MARKET = 20_000      # bozor hajmi: mijozlar shunga yaqinlashgani sari o'sish sekinlashadi
 
 
 # ---------------------------------------------------------------------------
@@ -201,12 +210,23 @@ def evaluate(layout, users, traffic_factor=1.0):
                 problems.append("Domen qaragan serverda Nginx yoki Load Balancer yo'q — so'rovni hech kim qabul qilmaydi")
         if not launch.get("deployed"):
             problems.append("Kod serverga yuklanmagan — 502 Bad Gateway (🚀 4-qadam: deploy)")
+    if launch and launch.get("neglected") and not launch.get("suspended"):
+        problems.insert(0, "⚠ Egasi kirmadi: sayt to'xtab qoldi (yangilanish va tekshiruv qilinmadi) — qayta ishga tushiring")
+    if launch and launch.get("suspended"):
+        problems.insert(0, "⛔ Hosting to'xtatildi: balans tugagan — serverlar o'chiq")
     over = [hid for hid, h in res["hosts"].items() if h["over_cpu"] or h["over_ram"]]
     path_ok = not problems and not over
 
     # --- Telegram bot va To'lov: ishlaydimi?
     bot_id = next((b for b in layout.ids("tgbot") if b in reach), None)
     bot_ok = bool(bot_id) and bool(layout.blocks[bot_id]["host"]) and         any(layout.kind(t) in ("app", "postgres", "pgbouncer") for t in layout.out(bot_id)) and         (layout.cfg(bot_id).get("mode") != "webhook" or ssl)
+    auth_id = next((t for a in apps for t in layout.out(a) if layout.kind(t) == "auth"), None)
+    auth_ok = bool(auth_id) and bool(layout.blocks[auth_id]["host"]) and \
+        any(layout.kind(t) in ("redis", "postgres", "pgbouncer") for t in layout.out(auth_id))
+    auth_method = layout.cfg(auth_id).get("method", "email") if auth_id else None
+    sms_missing = auth_method == "sms" and not (layout.launch or {}).get("sms", True)
+    if sms_missing:
+        auth_ok = False          # SMS provayder ulanmagan — kod yuborilmaydi
     pay_id = next((t for a in apps for t in layout.out(a) if layout.kind(t) == "payment"), None)
     payment_ok = bool(pay_id) and ssl
 
@@ -272,7 +292,8 @@ def evaluate(layout, users, traffic_factor=1.0):
             report_fail = REPORT_SHARE
 
     q_worker = min(jobs, worker_cap) * REPORT_QUERIES
-    db_qps = q_primary + q_worker
+    # har bir model (jadval) va bog'lanish bazaga biroz qo'shimcha yuk beradi
+    db_qps = (q_primary + q_worker) * (layout.launch or {}).get("db_load", 1.0)
     rho_db = db_qps / catalog.BLOCKS["postgres"]["capacity_qps"] if pg else 0
 
     pgbouncer = any(layout.kind(t) == "pgbouncer" for a in apps for t in layout.out(a))
@@ -330,6 +351,11 @@ def evaluate(layout, users, traffic_factor=1.0):
             labels[bid] = "ishlayapti" if bot_ok else ("webhook: HTTPS kerak" if b["host"] and not ssl
                                                        and b["config"].get("mode") == "webhook" else "ulanmagan")
             node_status[bid] = "green" if bot_ok else "off"
+        if k == "auth":
+            labels[bid] = (f"OTP: {'SMS' if auth_method == 'sms' else 'email (bepul)'}" if auth_ok
+                           else "SMS xizmati sotib olinmagan" if auth_id == bid and sms_missing
+                           else "Redis yoki PostgreSQL ga ulang" if auth_id == bid else "Sayt → Avtorizatsiya ulang")
+            node_status[bid] = "green" if auth_ok else "off"
         if k == "payment":
             labels[bid] = "pul tushyapti" if payment_ok and bid == pay_id else ("HTTPS kerak" if pay_id == bid else "ulanmagan")
             node_status[bid] = "green" if payment_ok and bid == pay_id else "off"
@@ -359,7 +385,7 @@ def evaluate(layout, users, traffic_factor=1.0):
         "queue_growth": round(queue_growth, 2),
         "db_qps": round(db_qps, 1), "conn_err": conn_err > 0,
         "apps": len(apps), "total_workers": round(total_workers, 1),
-        "bot_ok": bot_ok, "payment_ok": payment_ok, "ssl": ssl,
+        "bot_ok": bot_ok, "payment_ok": payment_ok, "ssl": ssl, "auth_ok": auth_ok, "auth_method": auth_method,
     }
 
 
@@ -415,6 +441,23 @@ def daily_cost(layout):
     return round(rent + power, 1), rent, round(power, 1)
 
 
+PAYMENT_FEE = 0.02          # to'lov tizimi har to'lovdan 2% oladi (Payme/Click kabi)
+SMS_PRICE = 0.02            # bitta SMS (OTP kod)
+LOGINS_PER_USER = 0.25      # mijozlarning ~25% i har kuni kod bilan kiradi
+
+
+def service_costs(layout, users, m, s):
+    """Tashqi xizmatlar haqi: to'lov komissiyasi va SMS. Dasturlar (Nginx, Django...) bepul."""
+    items = []
+    if s["revenue"] > 0:
+        items.append({"label": f"To'lov tizimi komissiyasi ({PAYMENT_FEE:.0%})", "amount": round(s["revenue"] * PAYMENT_FEE, 1)})
+    if m.get("auth_ok") and m.get("auth_method") == "sms":
+        sms = round(users * LOGINS_PER_USER * SMS_PRICE, 1)
+        if sms:
+            items.append({"label": f"SMS kodlar: {round(users * LOGINS_PER_USER)} ta × ${SMS_PRICE}", "amount": sms})
+    return items
+
+
 def day_sales(layout, users, m):
     """Bir kunlik sotuv. Biznes tanlanmagan (testlar) — eski oddiy model: mijoz × $0.75."""
     la = layout.launch or {}
@@ -424,8 +467,9 @@ def day_sales(layout, users, m):
         return {"rows": [], "revenue": rev, "cogs": 0.0, "ads": 0.0, "orders": 0, "unit": "dona",
                 "lost": not m["payment_ok"]}
     live = m["path_ok"] and m["status"] != "down"
+    demand = la.get("demand", 1.0) * (AUTH_DEMAND if m.get("auth_ok") else 1.0)
     return business.sales(key, la.get("offers") or business.default_offers(key), users,
-                          m["error_rate"], m["payment_ok"], live, la.get("demand", 1.0))
+                          m["error_rate"], m["payment_ok"], live, demand)
 
 
 def finance(layout, users, m, coins):
@@ -460,8 +504,8 @@ def finance(layout, users, m, coins):
         rent = catalog.BLOCKS[b["kind"]].get("rent", 0)
         if rent:
             items.append({"label": f"{catalog.BLOCKS[b['kind']]['title']} obunasi", "amount": rent})
-    power = resources(layout)["power_used"]
-    items.append({"label": f"Elektr: {power} W × {catalog.ELECTRICITY_PRICE}", "amount": round(power * catalog.ELECTRICITY_PRICE, 1)})
+    for it in service_costs(layout, users, m, s):
+        items.append(it)
     if s["cogs"]:
         items.insert(0, {"label": "Mahsulot tannarxi (sotilganlar)", "amount": s["cogs"]})
     fixed = round(sum(i["amount"] for i in items) - s["cogs"], 1)
@@ -477,18 +521,42 @@ def finance(layout, users, m, coins):
             "sales": s}
 
 
+def daily_growth(layout, users, m):
+    """Kunlik o'sish: tizim holati + bot + biznes/kampaniya; bozor to'yingani sari sekinlashadi."""
+    la = layout.launch or {}
+    if layout.launch is not None and not la.get("deployed") and not la.get("suspended"):
+        return 0.0          # sayt hali ochilmagan — mijozlar kutib turibdi, kamaymaydi ham
+    good = m["status"] in ("green", "yellow")
+    g = (GROWTH[m["status"]] + (BOT_GROWTH + la.get("bot_growth", 0) if m["bot_ok"] and good else 0)
+         + (la.get("growth", 0) if good else 0))
+    if g > 0:
+        g *= max(0.0, 1 - users / la.get("market", DEFAULT_MARKET))
+    return g
+
+
+def hour_step(layout, users, m, suspended=False):
+    """Bir o'yin soati: kunlik daromad/xarajatning 1/24 qismi, mijozlar silliq o'zgaradi."""
+    if suspended:
+        return {"users": max(min(users, 10.0), users * (1 + SUSPENDED_GROWTH) ** (1 / HOURS)),
+                "revenue": 0.0, "sales": 0.0, "cost": 0.0, "orders": 0.0, "cogs": 0.0, "ads": 0.0}
+    s = day_sales(layout, round(users), m)
+    cost, _, _ = daily_cost(layout)
+    cost += sum(i["amount"] for i in service_costs(layout, round(users), m, s))
+    g = daily_growth(layout, users, m)
+    return {"users": max(min(users, 10.0), users * (1 + g) ** (1 / HOURS)),
+            "revenue": (s["revenue"] + s["ads"]) / HOURS, "sales": s["revenue"] / HOURS, "cost": (cost + s["cogs"]) / HOURS,
+            "orders": s["orders"] / HOURS, "cogs": s["cogs"] / HOURS, "ads": s["ads"] / HOURS}
+
+
 def advance_day(layout, users, coins, neg_streak, seed, day):
     tf = traffic_factor_for(seed, day)
     m = evaluate(layout, users, traffic_factor=tf)
-    la = layout.launch or {}
-    good = m["status"] in ("green", "yellow")
-    growth = (GROWTH[m["status"]] + (BOT_GROWTH + la.get("bot_growth", 0) if m["bot_ok"] and good else 0)
-              + (la.get("growth", 0) if good else 0))
+    growth = daily_growth(layout, users, m)
     new_users = max(10, round(users * (1 + growth)))
     s = day_sales(layout, users, m)
     revenue = round(s["revenue"] + s["ads"], 1)
     cost, _, _ = daily_cost(layout)
-    cost = round(cost + s["cogs"], 1)
+    cost = round(cost + s["cogs"] + sum(i["amount"] for i in service_costs(layout, users, m, s)), 1)
     new_coins = round(coins + revenue - cost, 1)
     neg_streak = neg_streak + 1 if new_coins < 0 else 0
     entry = {"day": day, "users": users, "p95_ms": m["p95_ms"], "error_rate": m["error_rate"],
@@ -511,8 +579,6 @@ def advise(layout, m, users):
     if not m["path_ok"]:
         for p in m["path_problems"]:
             tip("bad", "Sayt ishlamayapti: " + p + ".", "bottleneck")
-    if m["power_used"] > m["power_limit"]:
-        tip("bad", f"Elektr limiti oshdi: {m['power_used']} / {m['power_limit']} W.")
     for hid, h in m["hosts"].items():
         if h["over_cpu"]:
             tip("bad", f"Bir serverda CPU yetmayapti ({h['cpu_used']}/{h['cpu_total']} yadro). "
@@ -535,6 +601,8 @@ def advise(layout, m, users):
         tip("info", "To'lov shlyuzi yo'q — mijozlar bepul foydalanmoqda, daromad 0. Uni qo'shib Saytga ulang.", "https")
     elif not m["payment_ok"]:
         tip("warn", "To'lov shlyuzi ishlamayapti: Sayt → To'lov ulanmagan yoki HTTPS yo'q.", "https", "payment")
+    if m["path_ok"] and not layout.first("auth") and users >= 300:
+        tip("info", "Mijozlar ko'paydi: Avtorizatsiya (OTP) qo'shing — akkaunt bo'lsa qaytib kelishadi (sotuv +10%).", "auth")
     bt = layout.first("tgbot")
     if bt and not m["bot_ok"]:
         tip("warn", "Telegram bot ishlamayapti: serverga joylang, Foydalanuvchilar → bot → Sayt ulang. "

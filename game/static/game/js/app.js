@@ -14,12 +14,14 @@ import { initLogs, logPush, onLog } from "./logs.js";
 import { renderReport, usd } from "./report.js";
 import { renderSite, drawFeed } from "./site.js";
 import { renderGrowth } from "./growth.js";
+import { startTour } from "./tour.js";
+import { demoBuild } from "./demo.js";
+import { FLOWS } from "./board.js";
 
 const data = JSON.parse(document.getElementById("static-data").textContent);
 const ui = { tab: "board", selected: null, draft: null, playing: false, chapter: null, tempEdge: null,
   file: "config/settings.py", search: "", line: null, reveal: null };
 let state = null;
-let timer = null;
 let busy = false;
 
 const $ = (id) => document.getElementById(id);
@@ -35,11 +37,29 @@ function toast(msg, isError = false, effect = "") {
 }
 
 // --- Har bir amalni o'raydi: xato bo'lsa toast, bo'lmasa qayta chizish ---
+// Amal kunlik pulni qanday o'zgartirdi — "nima qilsam nima bo'ladi"
+function impact(prev, next) {
+  if (!prev || !next || next.projected) return "";
+  const dr = next.revenue - prev.revenue, dc = next.cost - prev.cost;
+  if (Math.abs(dr) < 0.1 && Math.abs(dc) < 0.1) return "";
+  const parts = [];
+  if (Math.abs(dr) >= 0.1) parts.push(`daromad ${usd(dr, true)}`);
+  if (Math.abs(dc) >= 0.1) parts.push(`xarajat ${dc > 0 ? "+" : "−"}$${Math.abs(dc).toFixed(1)}`);
+  return `Kuniga: ${parts.join(", ")} → sof ${usd(prev.net, true)} ⇒ ${usd(next.net, true)}`;
+}
+
 async function run(promise, okMsg) {
   try {
+    const prevFin = state && state.finance;
+    const prevRoom = state && state.room.id;
     const res = await promise;
-    state = res.state;
-    if (okMsg || res.message) { toast(res.message || okMsg); logPush("you", `siz  ${res.message || okMsg}`, "you"); }
+    absorb(res.state);
+    const imp = prevRoom === res.state.room.id ? impact(prevFin, res.state.finance) : "";
+    if (okMsg || res.message || imp) {
+      const msg = [res.message || okMsg, imp].filter(Boolean).join(" · ");
+      toast(msg);
+      logPush("you", `siz  ${msg}`, "you");
+    }
     (res.events || []).forEach((e) => {
       const good = e.startsWith("🎉");
       toast(e, !good);
@@ -51,7 +71,7 @@ async function run(promise, okMsg) {
     toast(e.message, true, e.effect);
     logPush("you", `siz  ✗ ${e.message}`, "err");
     // xatodan keyin ham holatni sinxronlaymiz (masalan, sudralgan blok joyiga qaytsin)
-    try { state = (await api.state()).state; render(); } catch {}
+    try { absorb((await api.state()).state); render(); } catch {}
     return null;
   }
 }
@@ -87,6 +107,10 @@ const actions = {
   renameBlock: (id, name) => run(api.renameBlock(id, name)),
   power: () => run(api.power(), "Elektr limiti oshirildi"),
   buyGrowth: (kind, id) => run(api.growth(kind, id)),
+  resume: () => run(api.resume()),
+  withdraw: () => run(api.withdraw()),
+  saveAdmin: (cfg) => { ui.djDraft = null; run(api.saveAdmin(cfg)); },
+  tour: () => boardTour(),
   saveOffers: async (offers) => {
     const res = await run(api.offers(offers));
     if (res) { ui.offerDraft = null; render(); }
@@ -102,16 +126,16 @@ const actions = {
     return res;
   },
   // xonalar
-  openRoom: (id) => { stopPlay(); ui.selected = null; ui.offerDraft = null; run(api.openRoom(id)); },
+  openRoom: (id) => { ui.selected = null; ui.offerDraft = null; run(api.openRoom(id)); },
   newRoom: () => openNewRoomModal(),
   renameRoom: () => {
-    const name = prompt("Xona nomi:", state.room.name);
+    const name = prompt("Startup nomi:", state.room.name);
     if (name) run(api.renameRoom(state.room.id, name), "Nomlandi");
   },
   deleteRoom: () => {
-    if (!confirm(`"${state.room.name}" xonasini o'chirasizmi? Bu qaytarilmaydi.`)) return;
-    stopPlay(); ui.selected = null;
-    run(api.deleteRoom(state.room.id), "Xona o'chirildi");
+    if (!confirm(`"${state.room.name}" startupini o'chirasizmi? Bu qaytarilmaydi.`)) return;
+    ui.selected = null;
+    run(api.deleteRoom(state.room.id), "Startup o'chirildi");
   },
   tab(name) {
     ui.tab = name;
@@ -126,7 +150,7 @@ function openNewRoomModal() {
   const biz = data.catalog.businesses;
   $("modalCard").innerHTML = `
     <h2>🚀 Yangi startup</h2>
-    <p class="muted">Har xona — alohida biznes: o'z serverlari, kodi, sayti, mijozlari va puli bilan.</p>
+    <p class="muted">Har startup — alohida biznes: o'z serverlari, kodi, sayti, mijozlari va puli bilan.</p>
     <label class="field">Startup nomi <input id="nrName" maxlength="80" placeholder="masalan: MyDokon"></label>
     <h3>Qanday biznes ochasiz?</h3>
     <div class="biz-opts">${Object.entries(biz).map(([k, b], i) => `
@@ -135,9 +159,8 @@ function openNewRoomModal() {
         <span>${esc(b.pitch)}</span><span class="muted small">🧩 ${esc(b.learn)}</span>
         <span class="small">Boshlang'ich: ${b.offers.map((o) => `${o.emoji} ${esc(o.name)} $${o.price}`).join(" · ")}</span></label>`).join("")}
     </div>
-    ${state.room.coins >= 100 ? `<label class="field">Sarmoya: "${esc(state.room.name)}" hisobidan (hozir ${usd(state.room.coins)})
-      <select id="nrInvest">${[0, 250, 500, 1000, 2500, 5000].filter((v) => v <= state.room.coins).map((v) =>
-        `<option value="${v}">${v ? `${usd(v)} — yangi startupga boshlang'ich kapital` : "sarmoyasiz (standart kapital)"}</option>`).join("")}</select></label>` : ""}
+    <div class="tip info small">💰 Balans <b>umumiy</b> (hozir ${usd(state.room.coins)}): yangi startup alohida pul olmaydi —
+      uning serveri va xizmatlari ham shu bitta hamyondan to'lanadi. Har startupning o'z kassasi bor.</div>
     <label class="kind-opt" style="margin-top:10px"><input type="checkbox" id="nrScenario">
       <b>Yoki tayyor senariy: SmetaPro</b><span>Ishlab turgan kichik SaaS, maqsadlar va maslahatlar bilan (biznes tanlovi e'tiborga olinmaydi).</span></label>
     <div class="row end"><button class="btn ghost" id="nrCancel">Bekor</button>
@@ -149,57 +172,165 @@ function openNewRoomModal() {
     const scenario = $("nrScenario").checked;
     const key = document.querySelector("input[name=nrBiz]:checked").value;
     actions.closeModal();
-    stopPlay(); ui.selected = null; ui.offerDraft = null;
-    const invest = Number($("nrInvest")?.value || 0);
-    run(api.createRoom(scenario ? "scenario" : "sandbox", $("nrName").value, key, invest),
-      invest ? `Startup ochildi · ${usd(invest)} sarmoya kiritildi` : "Startup ochildi");
+    ui.selected = null; ui.offerDraft = null;
+    run(api.createRoom(scenario ? "scenario" : "sandbox", $("nrName").value, key), "Startup ochildi");
   };
 }
 
-// --- Vaqt: avto-o'yin (1 soniya = 1 kun) ---------------------------------
-// Pul minusga ketayotgan bo'lsa — kun o'tkazishdan oldin ogohlantiramiz
-function moneyGuard(days, auto) {
-  const f = state.finance;
-  if (state.room.neg_streak >= f.bankrupt_days) {
-    toast("Startup bankrot bo'lgan. ↺ bilan xonani qaytadan boshlang.", true);
-    return false;
-  }
-  if (f.net >= 0) { ui.ack = null; return true; }
-  const after = state.room.coins + f.net * days;
-  if (after >= 0 || ui.ack === state.room.id) return true;
-  if (auto) {
-    stopPlay();
-    toast(`To'xtatildi: har kuni ${usd(f.net, true)}, balans minusga ketadi. ${f.revenue_why}. O'ngdagi 💰 Moliyani qarang.`, true);
-    return false;
-  }
-  const ok = confirm(`Diqqat, pul tugayapti!\n\nDaromad: ${usd(f.revenue, true)} (${f.revenue_why})\nXarajat: ${usd(-f.cost)}\nHar kuni: ${usd(f.net, true)}\n\n` +
-    `${days} kundan keyin balans: ${usd(after)}.\n${f.bankrupt_days} kun ketma-ket minusda bo'lsa — bankrot.\n\nBaribir davom etasizmi?`);
-  if (ok) ui.ack = state.room.id;
-  return ok;
+// --- Birinchi tashrif: o'rgatish + tayyor kichik loyiha ------------------
+const ONB_KEY = "vallum.onboarded";
+function onbDone() { try { return localStorage.getItem(ONB_KEY) === "1"; } catch { return false; } }
+function onbMark() { try { localStorage.setItem(ONB_KEY, "1"); } catch { /* bo'sh */ } }
+
+const ONB_STEPS = [
+  ["👋 Vallumga xush kelibsiz", `Bu yerda siz <b>startup</b> ochasiz va uning backend tizimini o'zingiz qurasiz —
+    dasturlashni bilmasangiz ham. Tizim har qadamda nima qilishni ko'rsatadi.`],
+  ["▦ Doska — tizim chizmasi", `Yuqoridagi paneldan bloklarni (<b>Nginx</b>, <b>Sayt</b>, <b>PostgreSQL</b>, <b>Avtorizatsiya</b>...)
+    doskaga sudraysiz va <b>●</b> nuqtadan strelka tortib ulaysiz. Strelka — so'rov qayerga borishi.`],
+  ["💳 Pul nimaga ketadi", `Dasturlar <b>bepul</b> — ular kod. Pul faqat <b>server ijarasi</b>, domen va tashqi xizmatlarga
+    (to'lov 2%, SMS kodi $0.02) ketadi. Daromad — saytingiz mijozlari xaridlaridan.`],
+  ["⏱ Vaqt real yuradi", `1 o'yin kuni = 20 daqiqa. Siz yo'qligingizda ham hisob yuradi.
+    Lekin <b>3 kundan ortiq kirmasangiz sayt to'xtaydi</b> — egasiz biznes ishlamaydi.`],
+  ["🚀 Birinchi vazifa", `Sizga tayyor kichik loyiha beramiz: <b>Nginx → Sayt → PostgreSQL</b> + to'lov.
+    Doska tepasidagi 🚀 qatorida bosqichma-bosqich serverga chiqarasiz, keyin o'zingiz kengaytirasiz.`],
+];
+
+function maybeOnboard() {
+  if (onbDone() || !state) return;
+  let i = 0;
+  const draw = () => {
+    const [t, body] = ONB_STEPS[i], last = i === ONB_STEPS.length - 1;
+    const biz = data.catalog.businesses;
+    $("modalCard").innerHTML = `
+      <div class="onb">
+        <div class="onb-dots">${ONB_STEPS.map((_, k) => `<i class="${k === i ? "on" : k < i ? "done" : ""}"></i>`).join("")}</div>
+        <h2>${t}</h2><p>${body}</p>
+        ${last ? `<label class="field">Startup nomi <input id="onbName" maxlength="80" value="Mening birinchi startupim"></label>
+          <label class="field">Biznes turi <select id="onbBiz">${Object.entries(biz).map(([k, b]) =>
+            `<option value="${k}">${b.icon} ${esc(b.title)} — ${esc(b.pitch)}</option>`).join("")}</select></label>` : ""}
+        <div class="row" style="justify-content:space-between">
+          <button class="btn ghost" id="onbSkip">O'tkazib yuborish</button>
+          <span class="row">${i ? `<button class="btn ghost" id="onbBack">← Orqaga</button>` : ""}
+            ${last ? `<button class="btn" id="onbDemo" title="Bo'sh doskadan boshlab, tizim o'zi sudrab-ulab ko'rsatadi">🎬 Noldan qurib ko'rsat</button>` : ""}
+            <button class="btn primary" id="onbNext">${last ? "🚀 Tayyor loyiha" : "Keyingi →"}</button></span>
+        </div>
+      </div>`;
+    $("modal").classList.remove("hidden");
+    $("onbSkip").onclick = () => { onbMark(); actions.closeModal(); };
+    if (i) $("onbBack").onclick = () => { i--; draw(); };
+    if (last) $("onbDemo").onclick = () => {
+      const name = $("onbName").value || "Birinchi startup", key = $("onbBiz").value;
+      onbMark(); actions.closeModal();
+      ui.selected = null; ui.tab = "board";
+      run(api.createRoom("sandbox", name, key), "Bo'sh startup ochildi — kuzating").then(() => setTimeout(() =>
+        demoBuild({ actions, getState: () => state, onDone: (stopped) => {
+          ui.tab = "board"; ui.selected = null; render();
+          if (!stopped) toast("✓ Tizim tayyor! Endi o'zingiz: 🚀 qatoridagi qadamlarni bajaring");
+          setTimeout(launchHint, 400);
+        } }), 500));
+    };
+    $("onbNext").onclick = () => {
+      if (!last) { i++; draw(); return; }
+      const name = $("onbName").value || "Birinchi startup", key = $("onbBiz").value;
+      onbMark(); actions.closeModal();
+      ui.selected = null; ui.tab = "board";
+      run(api.createRoom("starter", name, key), "Tayyor loyiha ochildi").then(() => setTimeout(boardTour, 300));
+    };
+  };
+  draw();
 }
 
-async function tick(days, auto = false) {
-  if (busy) return;
-  if (!moneyGuard(days, auto)) return;
-  busy = true;
-  const before = state.history.length ? state.history[state.history.length - 1].day : 0;
-  const res = await run(api.tick(days));
-  busy = false;
-  // kun yakunlari logga: kim qancha keltirdi, qancha ketdi
-  (res?.state.history || []).filter((d) => d.day > before).forEach((d) => logPush("day",
-    `── Kun ${d.day} yakuni: ${d.users} mijoz${d.orders ? ` · ${d.orders} sotuv` : ""} · daromad ${usd(d.revenue, true)} · xarajat ${usd(-d.cost)} · sof ${usd(d.revenue - d.cost, true)} · balans ${usd(d.coins)}`,
-    d.revenue - d.cost >= 0 ? "day-pos" : "day-neg"));
-  if (res?.events?.length) stopPlay();
+
+// Ko'rsatmadan keyin: faqat 🚀 qadamini yoritib qo'yamiz
+function launchHint() {
+  startTour([{ el: ".lb-step.next", click: true, title: "🚀 Endi o'zingiz",
+    text: `Tizim chizildi va kod tayyor. Saytni internetga chiqarish — 5 qadam. Sariq tugma — <b>hozir qilinadigan qadam</b>.
+      Har qadamda terminal bor: buyruqni o'zingiz yozasiz, ▶ tugmasi esa yozib ko'rsatadi.` }]);
 }
-function startPlay() {
-  ui.playing = true;
-  $("btnPlay").textContent = "⏸ Pauza";
-  timer = setInterval(() => tick(1, true), 1000);
+
+// --- Yo'riqnoma: xiralashtirib, kerakli joyni ko'rsatadi ------------------
+function boardTour() {
+  ui.tab = "board"; render();
+  const deployed = state.launch.done.deploy;
+  startTour([
+    { el: "#board", title: "🗺 Sizning tizimingiz", text: `Bu — tayyor kichik loyiha: <b>Foydalanuvchilar → Nginx → Sayt → PostgreSQL</b>,
+      Saytga <b>To'lov shlyuzi</b> ulangan. Har blok bitta Server ichida ishlaydi. Blokni bossangiz — sozlamalari va kodi o'ngda ochiladi.` },
+    { el: "#toolbar", title: "🧩 Bloklar paneli", text: `Yangi qism kerak bo'lsa — shu yerdan doskaga sudrang va <b>●</b> nuqtadan strelka tortib ulang.
+      Dasturlar bepul (kod), faqat Server ijarasi va tashqi xizmatlar pullik.` },
+    { el: "#stats", title: "📊 Holat qatori", text: deployed ? "Sayt holati, foydalanuvchilar, tezlik va xatolar shu yerda." :
+      `Hozir <b>foydalanuvchi 0</b> — sayt hali internetda yo'q. <b>Deploy</b> qilinishi bilan birinchi <b>50 ta foydalanuvchi</b> keladi.` },
+    { el: "#balance", title: "💰 Balans va kassa", text: `Mijozlar to'lagan pul avval <b>To'lov shlyuzi kassasida</b> yig'iladi.
+      Uni balansga o'tkazish uchun <b>💰 Yechib olish</b> tugmasini bosing — kirib turmasangiz pul kassada qoladi, ijara esa balansdan ketaveradi.` },
+    { el: "#tabs", title: "🧭 Bo'limlar", text: `<b>Sayt</b> — saytingiz qanday ko'rinishi va narxlar, <b>O'sish</b> — reklama va yangi imkoniyatlar (SMS ham shu yerda),
+      <b>Kod</b> — backend fayllari, <b>Qo'llanma</b> — har bir mavzu sodda tilda.` },
+    { el: ".lb-step.next", click: true, title: "🚀 Birinchi vazifa", text: deployed ? "Keyingi qadam shu yerda ajratilgan — bosing va ko'rsatmaga amal qiling." :
+      `Saytni internetga chiqarish 5 qadam: Server → Domen → GitHub → Deploy → SSL. Sariq tugma — <b>hozir qilinadigan qadam</b>. Bosing!` },
+  ], { onDone: () => { try { localStorage.setItem("vallum.toured", "1"); } catch { /* bo'sh */ } } });
 }
-function stopPlay() {
-  ui.playing = false;
-  $("btnPlay").textContent = "▶ Boshlash";
-  clearInterval(timer);
+
+// --- Vaqt: o'yin real vaqtda yuradi --------------------------------------
+// Server har so'rovda o'tgan vaqtni hisoblaydi (siz yo'qligingizda ham).
+// Brauzer har 5 soniyada holatni so'raydi va soatni har soniya yangilaydi.
+let clockBase = null;      // {day, hour, at}
+function tickClock() {
+  if (!state || !clockBase) return;
+  const hs = state.clock.hour_seconds * 1000;
+  const passed = Math.floor((Date.now() - clockBase.at) / hs);
+  const total = clockBase.hour + passed;
+  const day = clockBase.day + Math.floor(total / 24), hour = total % 24;
+  $("dayChip").innerHTML = `Kun ${day} · ${String(hour).padStart(2, "0")}:00 ${state.suspended ? "<b class='neg'>⛔</b>" : state.neglected ? "<b class='neg'>⏸</b>" : "<span class='live-dot'></span>"}`;
+}
+
+function showAway(a) {
+  const h = a.hours, d = Math.floor(h / 24), hh = h % 24;
+  $("modalCard").innerHTML = `
+    <h2>👋 Siz yo'qligingizda</h2>
+    <p class="muted">O'yinda <b>${d ? `${d} kun ` : ""}${hh} soat</b> o'tdi${a.capped ? " (uzoq yo'qlik — ko'pi bilan 7 kun hisoblanadi)" : ""}. Tizim o'zi ishladi:</p>
+    <div class="fin">
+      <div class="fin-row in"><span>Daromad</span><b>${usd(a.revenue, true)}</b></div>
+      <div class="fin-row out"><span>Xarajat (server ijarasi, xizmatlar, tannarx)</span><b>${usd(-a.cost)}</b></div>
+      <div class="fin-row total ${a.net >= 0 ? "pos" : "neg"}"><span>Sof natija</span><b>${usd(a.net, true)}</b></div>
+      <div class="fin-row"><span>Balans</span><b>${usd(a.from.coins)} → ${usd(a.to.coins)}</b></div>
+      <div class="fin-row"><span>Mijozlar</span><b>${a.from.users} → ${a.to.users}</b></div>
+    </div>
+    ${state.neglected ? `<div class="tip bad">⏸ Siz uzoq kirmadingiz — sayt to'xtadi, ijara esa to'lanib turdi. Saytni qayta yoqing va tez-tez kirib turing.</div>` : ""}
+    ${a.suspended_at ? `<div class="tip bad">⛔ ${esc(a.suspended_at)} da balans tugadi — hosting serverlarni to'xtatdi. Xarajatni kamaytirib, qayta yoqing.</div>` : ""}
+    ${a.events.length ? `<h3>Nima bo'ldi</h3>${a.events.map((e) => `<div class="gr-ev ${e.startsWith("🎉") ? "good" : "bad"}">${esc(e)}</div>`).join("")}` : ""}
+    <div class="row end"><button class="btn primary" id="awayOk">Tushunarli</button></div>`;
+  $("modal").classList.remove("hidden");
+  $("awayOk").onclick = actions.closeModal;
+}
+
+// Yangi holat keldi: hodisalar, kun yakunlari, offlayn xulosa
+function absorb(next) {
+  const prevDay = state && state.room.id === next.room.id && state.history.length ? state.history[state.history.length - 1].day : null;
+  state = next;
+  clockBase = { day: next.clock.day, hour: next.clock.hour, at: Date.now() };
+  if (prevDay !== null) {
+    next.history.filter((d) => d.day > prevDay).forEach((d) => logPush("day",
+      `── Kun ${d.day} yakuni: ${d.users} mijoz${d.orders ? ` · ${d.orders} sotuv` : ""} · daromad ${usd(d.revenue, true)} · xarajat ${usd(-d.cost)} · sof ${usd(d.revenue - d.cost, true)} · balans ${usd(d.coins)}`,
+      d.revenue - d.cost >= 0 ? "day-pos" : "day-neg"));
+  }
+  (next.sync_events || []).forEach((e) => {
+    const good = e.startsWith("🎉");
+    if (!next.away) toast(e, !good);
+    logPush(good ? "day" : "err", e, good ? "day-pos" : "err");
+  });
+  if (next.away) showAway(next.away);
+}
+
+let pointerDown = false;
+async function poll() {
+  if (busy || document.hidden || !state) return;
+  try {
+    const res = await api.state();
+    absorb(res.state);
+    // foydalanuvchi yozayotgan / sudrayotgan / oyna ochiq bo'lsa — faqat yuqori qatorni yangilaymiz
+    const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+    const modalOpen = !$("modal").classList.contains("hidden");
+    if (typing || modalOpen || pointerDown || ui.draft || ui.offerDraft) renderStats(state);
+    else render();
+  } catch {}
 }
 
 // --- Chizish --------------------------------------------------------------
@@ -209,8 +340,9 @@ function render() {
   ["board", "site", "growth", "report", "code", "git", "guide"].forEach((p) => $("page-" + p).classList.toggle("hidden", ui.tab !== p));
   renderStats(state);
   renderRooms(state, actions);
-  $("roomTitle").textContent = `${state.room.name} · serverxona`;
-  $("scenarioTitle").textContent = state.room.kind === "scenario" ? data.scenario.title : "Bo'sh xona · noldan qurish";
+  $("roomTitle").textContent = state.room.name;
+  $("scenarioTitle").textContent = state.room.kind === "scenario" ? data.scenario.title
+    : (() => { const b = data.catalog.businesses[state.business?.key] || {}; return `${b.icon || "💡"} ${b.title || "Startup"} · tizim doskasi`; })();
 
   if (ui.tab === "board") {
     renderToolbar(state, data.catalog, actions);
@@ -239,16 +371,17 @@ function bindTopbar() {
     const t = e.target.closest("[data-tab]");
     if (t) actions.tab(t.dataset.tab);
   });
-  $("btnPlay").onclick = () => (ui.playing ? stopPlay() : startPlay());
-  $("btnDay").onclick = () => tick(1);
-  $("btnWeek").onclick = () => tick(7);
   $("btnReset").onclick = () => {
-    if (!confirm("Xonani boshidan boshlaysizmi? Undagi hamma o'zgarishlar o'chadi.")) return;
-    stopPlay();
+    if (!confirm("Startupni boshidan boshlaysizmi? Undagi hamma o'zgarishlar o'chadi.")) return;
     ui.selected = null;
-    run(api.reset(), "Xona qaytadan boshlandi");
+    run(api.reset(), "Startup qaytadan boshlandi");
   };
   $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") actions.closeModal(); });
+  $("btnTour").onclick = actions.tour;
+  // kassadan yechish — qayerda bo'lsa ham (yuqori panel, moliya kartasi, To'lov bloki)
+  document.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest("[data-withdraw]")) actions.withdraw();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") actions.closeModal();
     const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -261,7 +394,13 @@ function bindTopbar() {
 }
 
 bindTopbar();
+$("legendFlows").innerHTML = Object.values(FLOWS).map((f) =>
+  `<span class="lg-flow" title="${f.title}"><i style="background:${f.color}"></i>${f.label}</span>`).join("");
 initBoard();
 initLogs(() => state);
+setInterval(poll, 5000);
+setInterval(tickClock, 1000);
+document.addEventListener("pointerdown", () => { pointerDown = true; });
+document.addEventListener("pointerup", () => { pointerDown = false; });
 onLog((l) => { if (l.kind === "money" && ui.tab === "site") drawFeed(); });
-run(api.state());
+run(api.state()).then(maybeOnboard);

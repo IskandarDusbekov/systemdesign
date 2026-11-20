@@ -28,7 +28,7 @@ SERVER_TIERS = {
 
 POWER_UPGRADE_STEP_W = 300
 POWER_UPGRADE_COST = 150
-ELECTRICITY_PRICE = 0.05  # tanga / W / kun
+ELECTRICITY_PRICE = 0     # elektr server ijarasi ichida — alohida to'lanmaydi
 
 # ---------------------------------------------------------------------------
 # Bloklar (asboblar paneli).
@@ -67,7 +67,7 @@ BLOCKS = {
     "cdn": {
         "title": "CDN", "subtitle": "statik kesh", "layer": "kirish",
         "color": "#d6e5f6", "icon": "globe", "external": True, "shape": "cloud",
-        "cost": 40, "rent": 15, "cpu": 0, "ram_mb": 0, "power_w": 0, "max_count": 1,
+        "cost": 0, "rent": 15, "cpu": 0, "ram_mb": 0, "power_w": 0, "max_count": 1,
         "about": "Rasm, CSS, JS kabi statik fayllarni dunyo bo'ylab o'zi beradi — serverga yetib bormaydi.",
         "guide": "cdn",
         "fields": {},
@@ -86,7 +86,7 @@ BLOCKS = {
     "lb": {
         "title": "Load Balancer", "subtitle": "bo'luvchi", "layer": "kirish",
         "color": "#dff0de", "icon": "split", "shape": "slab",
-        "cost": 50, "cpu": 0.2, "ram_mb": 50, "power_w": 10, "max_count": 1,
+        "cost": 0, "cpu": 0.2, "ram_mb": 50, "power_w": 10, "max_count": 1,
         "capacity_rps": 5000,
         "about": "So'rovlarni bir nechta Sayt (app) serverlari orasida bo'lib beradi. Bitta server yetmay qolganda kerak.",
         "guide": "lb",
@@ -113,7 +113,7 @@ BLOCKS = {
     "worker": {
         "title": "Fon ishchisi", "subtitle": "celery", "layer": "ilova",
         "color": "#cfe3b2", "icon": "gear", "shape": "hex",
-        "cost": 40, "cpu": 0.1, "ram_mb": 100, "power_w": 20, "max_count": 3,
+        "cost": 0, "cpu": 0.1, "ram_mb": 100, "power_w": 20, "max_count": 3,
         "per_unit": {"field": "concurrency", "cpu": 0.2, "ram_mb": 100, "power_w": 5},
         "job_seconds": 1.5,
         "about": "Og'ir ishlarni (Excel hisobot) saytdan olib, navbat orqali bajaradi.",
@@ -126,7 +126,7 @@ BLOCKS = {
     "tgbot": {
         "title": "Telegram bot", "subtitle": "aiogram", "layer": "ilova",
         "color": "#d3e9f7", "icon": "plane", "shape": "disc",
-        "cost": 20, "cpu": 0.1, "ram_mb": 80, "power_w": 5, "max_count": 1,
+        "cost": 0, "cpu": 0.1, "ram_mb": 80, "power_w": 5, "max_count": 1,
         "about": "Mijozlar saytga kirmasdan Telegramda ishlaydi: yangi mijozlar oqimi (+2% o'sish/kun). "
                  "Ulash: Foydalanuvchilar → Telegram bot → Sayt (API) yoki PostgreSQL. Token .env da.",
         "guide": "telegram",
@@ -135,10 +135,25 @@ BLOCKS = {
                      "choices": [["polling", "polling (bot o'zi so'raydi)"], ["webhook", "webhook (HTTPS kerak)"]]},
         },
     },
+    "auth": {
+        "title": "Avtorizatsiya", "subtitle": "OTP: SMS / email", "layer": "ilova",
+        "color": "#e3f0d4", "icon": "shield", "shape": "lock",
+        "cost": 0, "cpu": 0.05, "ram_mb": 40, "power_w": 0, "max_count": 1,
+        "about": "Kirish: mijoz telefon yoki email kiritadi → unga 6 xonali bir martalik kod (OTP) yuboriladi → "
+                 "kodni yozsa — kirdi. Ulash: Sayt → Avtorizatsiya → Redis (kod 5 daqiqa saqlanadi). "
+                 "Akkaunt bo'lsa mijozlar qaytib keladi: sotuv +10%. SMS pullik ($0.02), email bepul.",
+        "guide": "auth",
+        "fields": {
+            "method": {"type": "choice", "default": "email", "label": "kod qayerga",
+                       "choices": [["email", "email (bepul)"], ["sms", "SMS telefon ($0.02 / kod)"]]},
+            "ttl": {"type": "int", "default": 300, "min": 60, "max": 900, "label": "kod amal qiladi (s)"},
+            "attempts": {"type": "int", "default": 5, "min": 3, "max": 10, "label": "urinishlar"},
+        },
+    },
     "payment": {
         "title": "To'lov shlyuzi", "subtitle": "tashqi API", "layer": "ilova",
         "color": "#fde3a7", "icon": "card", "external": True, "shape": "card",
-        "cost": 80, "cpu": 0, "ram_mb": 0, "power_w": 0, "max_count": 1,
+        "cost": 0, "cpu": 0, "ram_mb": 0, "power_w": 0, "max_count": 1,
         "about": "Mijozlardan pul yig'ish. Usiz daromad 0! Saytga ulang. Karta ma'lumoti ketgani uchun faqat HTTPS (SSL) bilan ishlaydi.",
         "guide": "https",
         "fields": {},
@@ -161,7 +176,7 @@ BLOCKS = {
     "replica": {
         "title": "Read replica", "subtitle": "o'qish nusxasi", "layer": "malumot",
         "color": "#ebe3f1", "icon": "db", "shape": "cyl2",
-        "cost": 60, "cpu": 0.5, "ram_mb": 256, "power_w": 40, "max_count": 3,
+        "cost": 0, "cpu": 0.5, "ram_mb": 256, "power_w": 40, "max_count": 3,
         "capacity_qps": 300,
         "about": "Bazaning faqat o'qish uchun nusxasi. Sayt unga ulansa, o'qishlarning 80% i shu yerga ketadi.",
         "guide": "replica",
@@ -170,7 +185,7 @@ BLOCKS = {
     "pgbouncer": {
         "title": "PgBouncer", "subtitle": "ulanish hovuzi", "layer": "malumot",
         "color": "#e8efd9", "icon": "pool", "shape": "ring",
-        "cost": 20, "cpu": 0.1, "ram_mb": 20, "power_w": 5, "max_count": 1,
+        "cost": 0, "cpu": 0.1, "ram_mb": 20, "power_w": 5, "max_count": 1,
         "about": "Bazaga ulanishlarni qayta ishlatadi: 100 ta worker bazada atigi 20 ta ulanish ochadi.",
         "guide": "replica",
         "fields": {},
@@ -178,7 +193,7 @@ BLOCKS = {
     "redis": {
         "title": "Redis", "subtitle": "kesh", "layer": "malumot",
         "color": "#f6cfc7", "icon": "db", "shape": "puck",
-        "cost": 30, "cpu": 0.1, "ram_mb": 64, "power_w": 10, "max_count": 1,
+        "cost": 0, "cpu": 0.1, "ram_mb": 64, "power_w": 10, "max_count": 1,
         "about": "Kesh. Saytga ulansa, bazaga o'qish so'rovlarining ~70% ini o'zi oladi.",
         "guide": "cache",
         "fields": {
@@ -281,6 +296,14 @@ BLOCK_CODE = {
         "?mode=polling # polling: bot har soniya Telegramdan yangi xabar so'raydi",
         "# kod: Kod → bot/main.py · token: .env → TELEGRAM_BOT_TOKEN",
     ]},
+    "auth": {"file": "accounts/otp.py", "lines": [
+        "# OTP: bir martalik kod. Yuborish usuli: {method}",
+        "CODE_TTL = {ttl}          # soniya — keyin kod yaroqsiz",
+        "MAX_ATTEMPTS = {attempts}     # ko'p noto'g'ri urinish — bloklanadi (taxmin qilib bo'lmasin)",
+        "?method=sms # SMS: provayder API (masalan Eskiz) → kalit .env: SMS_API_KEY",
+        "?method=email # Email: SMTP → parol .env: EMAIL_HOST_PASSWORD",
+        "# kod Redis'da saqlanadi:  otp:<telefon> = 482913  (TTL bilan o'zi o'chadi)",
+    ]},
     "payment": {"file": "payment.provider/dashboard", "lines": [
         "api_key = ${WEBHOOK_SECRET}",
         "# Sayt to'lov so'rovini API orqali yuboradi, javobni bazaga yozadi",
@@ -311,6 +334,8 @@ ENDPOINTS = [
     {"path": "/upload/", "method": "POST", "what": "Excel yuklash", "flow": "Nginx → Sayt → media/", "field": None},
     {"path": "/pay/", "method": "POST", "what": "To'lov", "flow": "Sayt → To'lov shlyuzi API → Baza (faqat HTTPS)", "field": None},
     {"path": "/tg/", "method": "POST", "what": "Telegram webhook", "flow": "Telegram → Nginx → bot (HTTPS shart)", "field": None},
+    {"path": "/auth/otp/", "method": "POST", "what": "Kod yuborish (OTP)", "flow": "Sayt → Avtorizatsiya → Redis + SMS/email", "field": None},
+    {"path": "/auth/verify/", "method": "POST", "what": "Kodni tekshirish", "flow": "Avtorizatsiya → Redis → sessiya", "field": None},
     {"path": "/login/", "method": "POST", "what": "Kirish", "flow": "Sayt → Baza (sessiya SECRET_KEY bilan imzolanadi)", "field": "secret_source"},
 ]
 
@@ -333,6 +358,8 @@ def new_env():
         "DB_PASSWORD": secrets.token_urlsafe(9),
         "REDIS_PASSWORD": secrets.token_urlsafe(9),
         "WEBHOOK_SECRET": "whsec_" + secrets.token_hex(8),
+        "SMS_API_KEY": "sms_" + secrets.token_hex(10),
+        "EMAIL_HOST_PASSWORD": secrets.token_urlsafe(12),
         "TELEGRAM_BOT_TOKEN": f"{secrets.randbelow(9_000_000_000) + 1_000_000_000}:AA" + secrets.token_urlsafe(24),
     }
 
@@ -434,6 +461,7 @@ def public_catalog():
         "requirements": rules.REQUIREMENTS,
         "businesses": business.public(),
         "growth": growth.public(),
+        "electricity_price": ELECTRICITY_PRICE,
         "domain_cost": launch.DOMAIN_COST,
         "domain_zones": launch.DOMAIN_ZONES,
         "endpoints": ENDPOINTS,

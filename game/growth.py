@@ -39,6 +39,8 @@ UPGRADES = {
                "about": "App Store / Play Market: +1%/kun mijoz, sotuv +10%, lekin trafik 1.25×."},
     "monitoring": {"title": "Monitoring (Grafana + alert)", "icon": "📟", "cost": 150, "demand": 1.0, "traffic": 1.0, "growth": 0.0,
                    "about": "Muammo bo'lsa darhol xabar keladi: elektr uzilishi va buzilishlarda mijoz kam yo'qotiladi."},
+    "sms": {"title": "SMS provayder (Eskiz / Twilio)", "icon": "📲", "cost": 50, "demand": 1.0, "traffic": 1.0, "growth": 0.0,
+            "needs": "auth", "about": "Telefon raqamiga OTP kod yuborish. Ulash $50, keyin har SMS $0.02. Email OTP esa bepul."},
     "backup": {"title": "Kunlik zaxira nusxa (backup)", "icon": "💾", "cost": 120, "demand": 1.0, "traffic": 1.0, "growth": 0.0,
                "about": "Disk buzilsa — ma'lumotlar zaxiradan tiklanadi. Usiz: mijozlarning chorak qismi ketadi."},
 }
