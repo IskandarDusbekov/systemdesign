@@ -59,6 +59,12 @@ export function renderOwner(state, actions) {
     const v = prompt("Yangi balans ($):", b.dataset.cur);
     if (v !== null && v.trim() !== "") doAct({ action: "balance", user: +b.dataset.bal, amount: Number(v) });
   });
+  root.querySelectorAll("[data-uadd]").forEach((b) => b.onclick = () =>
+    doAct({ action: "users", room: +b.dataset.room, users: +b.dataset.cur + +b.dataset.uadd }));
+  root.querySelectorAll("[data-uset]").forEach((b) => b.onclick = () => {
+    const v = prompt(`${b.dataset.name}: mijozlar soni (0 — 1 000 000):`, b.dataset.cur);
+    if (v !== null && v.trim() !== "") doAct({ action: "users", room: +b.dataset.uset, users: Math.round(Number(v)) });
+  });
   root.querySelectorAll("[data-free]").forEach((b) => b.onclick = () => doAct({ action: "release_domain", room: +b.dataset.free },
     `${b.dataset.name} domenini bo'shatasizmi? Sayt bu domen orqali ochilmay qoladi.`));
   root.querySelectorAll("[data-delsrv]").forEach((b) => b.onclick = () => doAct({ action: "delete_server", block: +b.dataset.delsrv },
@@ -82,7 +88,10 @@ function body() {
   if (sec === "rooms") {
     return table(["Startup", "Egasi", "Vaqt", "Mijoz", "Kassa", "Vaqtni surish"], d.rooms.map((r) => `<tr>
       <td>${esc(r.name)} ${r.suspended ? `<span class="ow-tag bad">to'xtagan</span>` : ""}</td><td>${esc(r.owner)}</td>
-      <td class="mono">Kun ${r.day} · ${String(r.hour).padStart(2, "0")}:00</td><td>${r.users}</td><td class="mono">${money(r.kassa)}</td>
+      <td class="mono">Kun ${r.day} · ${String(r.hour).padStart(2, "0")}:00</td>
+      <td class="ow-acts"><span class="mono">${r.users}</span>
+        <button class="btn mini" data-uadd="100" data-room="${r.id}" data-cur="${r.users}" title="+100 mijoz">+100</button>
+        <button class="btn mini" data-uset="${r.id}" data-cur="${r.users}" data-name="${esc(r.name)}" title="Aniq sonni kiritish">${ico("edit", 12)}</button></td><td class="mono">${money(r.kassa)}</td>
       <td class="ow-acts"><button class="btn mini" data-time="1" data-room="${r.id}">+1 soat</button>
         <button class="btn mini" data-time="24" data-room="${r.id}">+1 kun</button>
         <button class="btn mini" data-time="168" data-room="${r.id}">+7 kun</button></td></tr>`), "Startup yo'q");

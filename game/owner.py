@@ -69,6 +69,19 @@ def act(d):
             raise GameError("Bu o'yinchida hali startup yo'q.")
         rooms.update(coins=amount)            # hamyon umumiy — hamma startupiga bir xil
         return f"{user.email or user.username}: balans ${amount:,.2f}"
+    if action == "users":
+        # Mijozlar sonini qo'lda o'rnatish (sinov yoki sovg'a uchun)
+        room = Room.objects.get(pk=int(d.get("room")))
+        try:
+            n = int(d.get("users"))
+        except (TypeError, ValueError):
+            raise GameError("Mijozlar soni butun son bo'lsin.")
+        if not 0 <= n <= 1_000_000:
+            raise GameError("Mijozlar soni 0 dan 1 000 000 gacha.")
+        old = room.users
+        room.users = n
+        room.save(update_fields=["users"])
+        return f"{room.name}: mijozlar {old:,} → {n:,}"
     if action == "release_domain":
         room = Room.objects.get(pk=int(d.get("room")))
         flags = dict(room.flags or {})

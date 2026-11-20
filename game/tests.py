@@ -658,6 +658,13 @@ class AccountTests(TestCase):
                          content_type="application/json")
         room.refresh_from_db()
         self.assertEqual(room.coins, 1234)
+        self.client.post("/api/owner", {"action": "users", "room": room.id, "users": 750},
+                         content_type="application/json")
+        room.refresh_from_db()
+        self.assertEqual(room.users, 750)
+        bad = self.client.post("/api/owner", {"action": "users", "room": room.id, "users": -5},
+                               content_type="application/json").json()
+        self.assertFalse(bad.get("ok"))
         self.client.post("/api/owner", {"action": "release_domain", "room": room.id},
                          content_type="application/json")
         room.refresh_from_db()
