@@ -279,13 +279,20 @@ def evaluate(layout, users, traffic_factor=1.0):
     rho_w = queue_growth = jobs = worker_cap = 0.0
     report_fail = 0.0
     worker_id = None
+    worker_ids = []
     if not sync:
-        worker_id = next((t for a in apps for t in layout.out(a) if layout.kind(t) == "worker"), None)
+        # Saytga ulangan HAMMA Fon ishchilari bitta navbatdan vazifa oladi (Celery kabi) —
+        # sig'im yig'iladi. Har ishchi o'z serverining CPU'sida ishlaydi.
+        for a in apps:
+            for t in layout.out(a):
+                if layout.kind(t) == "worker" and t not in worker_ids:
+                    worker_ids.append(t)
+        worker_id = worker_ids[0] if worker_ids else None
         if worker_id:
             jobs = legit_report * g_through
-            wc = layout.cfg(worker_id)
-            sp = host_speed(layout, layout.blocks[worker_id]["host"])
-            worker_cap = wc.get("concurrency", 1) / catalog.BLOCKS["worker"]["job_seconds"] * sp
+            for w in worker_ids:
+                sp = host_speed(layout, layout.blocks[w]["host"])
+                worker_cap += layout.cfg(w).get("concurrency", 1) / catalog.BLOCKS["worker"]["job_seconds"] * sp
             rho_w = jobs / max(worker_cap, 0.01)
             queue_growth = max(0.0, jobs - worker_cap)
         else:
@@ -298,7 +305,7 @@ def evaluate(layout, users, traffic_factor=1.0):
 
     pgbouncer = any(layout.kind(t) == "pgbouncer" for a in apps for t in layout.out(a))
     raw_conns = sum(layout.cfg(a).get("workers", 0) for a in apps) + \
-        (layout.cfg(worker_id).get("concurrency", 0) if worker_id else 0)
+        sum(layout.cfg(w).get("concurrency", 0) for w in worker_ids)
     conns = 20 if pgbouncer else raw_conns
     conn_err = 0.3 if pg and conns > layout.cfg(pg).get("max_connections", 100) else 0
 
@@ -326,7 +333,7 @@ def evaluate(layout, users, traffic_factor=1.0):
     # --- Har bir blokning band bo'lishi va yorlig'i
     ns = {"users": users, "nginx_rps": nginx_rps, "total_workers": total_workers, "rho_g": rho_g,
           "db_qps": db_qps, "rho_db": rho_db, "rho_replica": rho_replica, "replica": replica,
-          "redis_on": redis_on, "rho_w": rho_w, "queue_growth": queue_growth, "worker_id": worker_id}
+          "redis_on": redis_on, "rho_w": rho_w, "queue_growth": queue_growth, "worker_id": worker_id, "worker_ids": worker_ids}
     util, node_status, labels = {}, {}, {}
     for bid, b in layout.blocks.items():
         k = b["kind"]
@@ -341,7 +348,7 @@ def evaluate(layout, users, traffic_factor=1.0):
             rho = rho_db
         elif k == "replica":
             rho = rho_replica
-        elif k == "worker" and bid == worker_id:
+        elif k == "worker" and bid in worker_ids:
             rho = rho_w
         if rho is not None:
             util[bid] = round(rho, 3)
@@ -410,7 +417,7 @@ def _label(layout, bid, ns):
     if k == "redis":
         return "kesh 70%" if ns["redis_on"] else "ulanmagan"
     if k == "worker":
-        if bid == ns["worker_id"]:
+        if bid in ns["worker_ids"]:
             return f"navbat +{ns['queue_growth']:.1f}/s" if ns["queue_growth"] > 0 else f"{ns['rho_w']:.0%}"
         return "ulanmagan"
     return catalog.BLOCKS[k]["subtitle"]
@@ -632,7 +639,9 @@ def advise(layout, m, users):
         tip("bad", "Bazaga ulanishlar max_connections dan oshdi. PgBouncer ulanishlarni qayta ishlatadi.",
             "replica", "postgres")
     if m["queue_growth"] > 0:
-        tip("warn", f"Fon navbati o'smoqda (+{m['queue_growth']}/s). Jarayonlar sonini oshiring.", "background", "worker")
+        tip("warn", f"Fon navbati o'smoqda (+{m['queue_growth']}/s). Jarayonlar sonini (concurrency) oshiring "
+                    "yoki boshqa serverga yana bitta Fon ishchisi qo'yib, Saytga ulang — ular navbatni birga bajaradi.",
+            "background", "worker")
     rd = layout.first("redis")
     if rd and layout.cfg(rd).get("bind") == "0.0.0.0" and not layout.cfg(rd).get("password"):
         tip("warn", "Redis 0.0.0.0 da va parolsiz — internetga ochiq.", "cache", "redis")

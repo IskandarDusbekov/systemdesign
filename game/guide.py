@@ -367,13 +367,66 @@ CHAPTERS = {
         "title": "Og'ir ishni fonga o'tkazish",
         "lead": "Gunicorn workeri bir vaqtda faqat BITTA so'rovga xizmat qiladi. 2 soniyalik hisobot workerni band qiladi.",
         "body": [
+            {"h": "Muammo: sinxron hisobot"},
+            {"p": "Mijoz 'Excel hisobot' tugmasini bosdi. Sinxron rejimda Sayt workeri hisobotni o'zi tuzadi — "
+                  "2 soniya davomida boshqa hech kimga xizmat qilmaydi. So'rovlarning atigi 5% i hisobot bo'lsa ham, "
+                  "workerlar vaqtining ~60% i shunga ketadi. Natija: Sayt qizil (100%+), qolgan mijozlar xato oladi."},
+            {"h": "Yechim: navbat + Fon ishchisi"},
             {"steps": [
-                "Fon ishchisi blokini qo'shing.",
+                "Fon ishchisi blokini qo'shing (iloji bo'lsa 2-serverga — 1-serverda CPU Saytga kerak).",
                 "Sayt → Fon ishchisi va Fon ishchisi → PostgreSQL strelkalarini torting.",
-                "Kod → app/views.py → hisobot rejimini 'fonda' qiling va saqlang.",
+                "Kod → hisobot rejimini 'fonda' qiling va saqlang.",
             ]},
-            {"p": "Endi so'rov faqat vazifani navbatga qo'yadi (50 ms), og'ir ishni Fon ishchisi bajaradi."},
-            {"tip": "Navbat limitini (max_queue) qo'ying — aks holda navbat cheksiz o'sishi mumkin."},
+            {"p": "Endi Sayt faqat vazifani navbatga qo'yadi (0,05 s) va darhol 'Hisobot tayyorlanmoqda' deb javob beradi. "
+                  "Og'ir ishni Fon ishchisi bajaradi, tayyor faylni media/ ga qo'yadi."},
+            {"h": "Nima qilsangiz — nima bo'ladi"},
+            {"cmds": [
+                ["hisobot: sinxron", "Sayt workerlari hisobotga band. Ko'p mijozda Sayt qizil, xatolar ko'payadi."],
+                ["hisobot: fonda, Fon ishchisi yo'q", "Hisobotlar yo'qoladi — navbatni hech kim olmaydi (maslahatchi qizil ogohlantiradi)."],
+                ["hisobot: fonda + Fon ishchisi", "Sayt yengillashadi (~60% kam yuk). Hisobot bir necha soniyada tayyor bo'ladi."],
+                ["'navbat +X/s' yozuvi", "Ishchi ulgurmayapti: har soniyada navbatga X ta vazifa ortiqcha qo'shilyapti, hisobot kutish vaqti cho'ziladi."],
+                ["concurrency oshirish", "Bitta ishchi bir vaqtda ko'proq vazifa bajaradi, lekin har jarayon o'z serverining CPU/RAM'ini yeydi."],
+                ["2-serverga yana Fon ishchisi", "Ikkala ishchi BITTA navbatdan vazifa oladi — sig'im qo'shiladi, yuk serverlarga bo'linadi."],
+                ["Fon ishchisi Saytga ulanmagan", "Blok kulrang 'ulanmagan' — u ishlamaydi, lekin serverda joy egallab turadi."],
+            ]},
+            {"tip": "Real hayotda bu Celery (yoki RQ) + Redis/RabbitMQ: Django vazifani navbatga qo'yadi, "
+                    "'celery worker' jarayonlari uni oladi. Email yuborish, fayl/rasm ishlash, hisobot, to'lov tekshiruvi — hammasi shunday."},
+            {"warn": "Ishchini Saytning o'sha serveriga qo'ysangiz, ular bir CPU'ni talashadi. CPU 100% ga yetsa — butun server sekinlashadi."},
+        ],
+    },
+    "roles": {
+        "part": "Kengayish",
+        "title": "Bir nechta server: kim nima qiladi",
+        "lead": "Server — bu shunchaki mashina. Foyda unga qaysi blok (dastur) qo'yganingizga bog'liq.",
+        "body": [
+            {"p": "Bitta serverdagi hamma dastur bitta CPU va RAM'ni bo'lishadi. Yuk oshganda dasturlarni "
+                  "vazifasiga qarab serverlarga ajratasiz. Har blokning vazifasi:"},
+            {"cmds": [
+                ["Nginx", "Eshik: internetdan so'rovni qabul qiladi, statik fayllarni beradi, qolganini Saytga uzatadi."],
+                ["Load Balancer", "Yo'naltiruvchi: so'rovlarni bir nechta Sayt o'rtasida bo'ladi. Biri yiqilsa — qolganiga yuboradi."],
+                ["Sayt (Django)", "Asosiy ish: sahifa, ro'yxatdan o'tish, buyurtma. Workerlar soni = bir vaqtda nechta so'rov."],
+                ["Fon ishchisi", "Kutib turmasa bo'ladigan og'ir ishlar: hisobot, email, rasm/fayl, ommaviy xabar."],
+                ["PostgreSQL", "Asosiy baza: hamma yozuvlar shu yerda. Odatda alohida, kuchli serverda turadi."],
+                ["Read replica", "Bazaning nusxasi faqat o'qish uchun. O'qishlarni olib, asosiy bazani yengillatadi."],
+                ["PgBouncer", "Bazaga ulanishlar hovuzi: yuzlab worker ulanishini ~20 ta ulanishga yig'adi."],
+                ["Redis", "Tez xotira: kesh (tez-tez so'raladigan ma'lumot), sessiya, OTP kodlar, navbat."],
+                ["CDN", "Rasm/CSS/JS ni foydalanuvchiga yaqin serverlardan beradi — sizning serveringizga yuk kamayadi."],
+            ]},
+            {"h": "Odatiy bo'linish"},
+            {"list": [
+                "1 server: hammasi bitta joyda. Boshlash uchun yetarli (~1–2 ming mijoz).",
+                "2 server: 1-server — Nginx + Sayt; 2-server — PostgreSQL + Fon ishchisi. Sayt CPU'si faqat so'rovlarga qoladi.",
+                "3+ server: Load Balancer ortida 2–3 ta Sayt serveri, alohida baza serveri, alohida fon serveri, Redis.",
+            ]},
+            {"h": "Bir xil blokdan bir nechta bo'lsa"},
+            {"list": [
+                "Bir nechta Sayt — Load Balancer orqali ulansa, workerlari yig'iladi. LB'siz qo'yilgan 2-Sayt ishlamaydi.",
+                "Bir nechta Fon ishchisi — hammasi Saytga ulansa, bitta navbatdan birga vazifa oladi (sig'im yig'iladi).",
+                "Bir nechta Read replica — o'qish yuki ular o'rtasida bo'linadi.",
+                "Ikkita Nginx yoki ortiqcha ulanmagan blok — foyda bermaydi, faqat CPU/RAM egallaydi. Keraksizini o'chiring.",
+            ]},
+            {"tip": "Qaysi serverga qo'yish kerakligini bilish uchun Server blokini bosing: CPU/RAM bandligi va tavsiyalar chiqadi. "
+                    "Qoida: qizil (to'lgan) serverdan og'ir blokni bo'sh serverga ko'chiring."},
         ],
     },
     "lb": {
@@ -557,6 +610,11 @@ CHAPTERS = {
             {"p": "Moliya kartasini oching: xarajat katta bo'lsa — keraksiz server yoki CDN ni o'chiring, narxlarni ko'ring."},
             {"h": "GitHub / Deploy qadami yopiq"},
             {"p": "'Noldan' startupda avval 0-qadam: kompyuteringizda loyiha yarating — yuklaydigan kod bo'lishi kerak."},
+            {"h": "'navbat +X/s' (Fon ishchisi)"},
+            {"p": "Fon ishchisi ulgurmayapti. Jarayonlar sonini (concurrency) oshiring yoki boshqa serverga yana bitta Fon ishchisi qo'yib Saytga ulang."},
+            {"h": "Ko'p mijoz qo'shildi — holat 'Yomon'"},
+            {"p": "Holat qatoridagi tor bo'g'izga qarang. Sayt bo'lsa — hisobotni fonga o'tkazing, keyin Load Balancer + 2-Sayt. "
+                  "Baza bo'lsa — Redis, Read replica, PgBouncer. Server CPU'si to'lgan bo'lsa — bloklarni 2-serverga ko'chiring."},
             {"h": "Blok qo'shilmayapti"},
             {"p": "Serverda CPU yoki RAM yetmayapti. Serverni kattalashtiring (Server → tur) yoki yangi server oling."},
         ],

@@ -65,6 +65,23 @@ class EngineTests(TestCase):
         self.assertAlmostEqual(two["total_workers"], one["total_workers"] * 2, places=1)
         self.assertLess(two["util"][20], one["util"][20])
 
+    def test_several_background_workers_share_queue(self):
+        """Saytga ulangan hamma Fon ishchilari bitta navbatni birga bajaradi."""
+        def lay(n):
+            l = make_layout(workers=8)
+            l.code["report_mode"] = "background"
+            for i in range(n):
+                wid = 40 + i
+                l.blocks[wid] = {"kind": "worker", "host": 1 + i % 2, "name": f"w{i}",
+                                 "config": {"concurrency": 2, "max_queue": 0}}
+                l.edges |= {(20, wid), (wid, 12)}
+            return l
+        one = engine.evaluate(lay(1), 20000)
+        two = engine.evaluate(lay(2), 20000)
+        self.assertLess(two["util"][40], one["util"][40])
+        self.assertEqual(two["util"][40], two["util"][41])      # ikkalasi bir navbatda
+        self.assertNotEqual(two["labels"][41], "ulanmagan")
+
     def test_overloaded_host_slows_down(self):
         lay = make_layout()
         lay.hosts[1]["config"] = catalog.clean_config("server", {"tier": "kichik"})

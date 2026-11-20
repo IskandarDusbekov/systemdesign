@@ -29,7 +29,7 @@ Hammasi **simulyatsiya** — hech qanday real tarmoq so'rovi yo'q.
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python manage.py migrate
 .venv\Scripts\python manage.py runserver
-.venv\Scripts\python manage.py test game      # 59 ta test, hammasi o'tishi kerak
+.venv\Scripts\python manage.py test game      # 60 ta test, hammasi o'tishi kerak
 ```
 JS sintaksisini tekshirish: `node --check game/static/game/js/<fayl>.js`.
 Ishlaydigan muhit — `.venv` (bo'sh `venv/` papkasi ham bor, unda Django yo'q). Brauzer static fayllarni keshlaydi — CSS/JS o'zgarsa Ctrl+F5.
@@ -114,6 +114,7 @@ CSS: `game/static/game/css/vallum.css` — bo'limlar `v3`…`v14` izohlari bilan
 10. Akkauntlar (email+parol, xavfsiz), har kimning o'z startup/hamyoni, 🛠 Boshqaruv + g'azna, o'yin ichidagi Django admin (superuser, login, panel nomi), Darsni tez takrorlash + Jarayon logi, brauzer tablari + Qidirbek, Kod maydonlari kontrasti (`.ln2.edl`), import map (kesh).
 11. Hamyon bir tekis (sync_owner) + xarajatlar ro'yxati; ijara faqat soatbay; server root paroli + ssh parol; serverlar/domenlarni o'chirish; tez rejimda erkin papka nomi; "Kunlik natijalar" grafigi yig'ilgan (`vallum.chart`).
 12. Darsda mashq rejimida ham erkin papka nomi; **faylda to'g'ridan-to'g'ri tahrirlash** (butun fayl, joyni o'zi topadi, Ctrl+S tekshiruvi, `djfiles.js`); Project'da fayllarni ochib ko'rish.
+13. Boshqaruvda mijozlar sonini qo'lda o'zgartirish; engine: Saytga ulangan HAMMA Fon ishchilari bitta navbatni birga bajaradi (`worker_ids`); qo'llanma: "Og'ir ishni fonga" kengaytirildi, yangi bob `roles` (Bir nechta server: kim nima qiladi).
 9. O'yin ichidagi Brauzer (Bulutxon.uz, Domenchi.uz, Qidirgich → Qidirbek); domen + A yozuvi alohida; GitHub username; PyCharm; darsni qayta ko'rish; aniqroq "Tushundim" (vazifa qatorida ham); lesson/launch terminal ID to'qnashuvi tuzatildi.
 
 ## 7. Keyingi g'oyalar (foydalanuvchi bilan kelishilgan yo'nalish)
