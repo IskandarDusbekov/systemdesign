@@ -1,0 +1,62 @@
+{% load static %}<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if mode == "register" %}Ro'yxatdan o'tish{% else %}Kirish{% endif %} · Vallum</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'game/css/vallum.css' %}">
+</head>
+<body class="auth-body">
+  <main class="auth">
+    <section class="auth-side">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 20V9l3-2v3l3-2v3l3-2 3 2V8l3 2V7l3 2v11z" fill="#cfe3b2" stroke="#1d1b18" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="brand-name">Vallum</span>
+        <span class="brand-tag">backend o'yini</span>
+      </div>
+      <h1>Startup oching va uning backendini o'zingiz quring.</h1>
+      <ul class="auth-points">
+        <li>Server ijaraga oling, domen sotib oling, saytni internetga chiqaring.</li>
+        <li>Django loyihani noldan — terminal va muharrirda, xuddi hayotdagidek.</li>
+        <li>Mijozlar, daromad, tor bo'g'izlar — hammasi real vaqtda.</li>
+      </ul>
+      <p class="auth-note">Har bir o'yinchining o'z akkaunti, o'z startuplari va o'z hamyoni bor.</p>
+    </section>
+
+    <section class="auth-card card">
+      <div class="auth-tabs">
+        <a href="/kirish/" class="{% if mode == 'login' %}on{% endif %}">Kirish</a>
+        <a href="/royxat/" class="{% if mode == 'register' %}on{% endif %}">Ro'yxatdan o'tish</a>
+      </div>
+      <form method="post" novalidate>
+        {% csrf_token %}
+        {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+        {% if error %}<div class="auth-err">{{ error }}</div>{% endif %}
+        {% for e in form.non_field_errors %}<div class="auth-err">{{ e }}</div>{% endfor %}
+        {% for field in form %}
+          <label class="auth-f">
+            <span>{{ field.label }}</span>
+            <input type="{% if 'password' in field.name %}password{% elif mode == 'login' %}text{% else %}email{% endif %}" name="{{ field.html_name }}"
+                   value="{% if 'password' not in field.name %}{{ field.value|default_if_none:'' }}{% endif %}"
+                   autocomplete="{% if field.name == 'email' %}email{% elif mode == 'register' %}new-password{% else %}current-password{% endif %}"
+                   {% if forloop.first %}autofocus{% endif %} required>
+            {% for e in field.errors %}<small class="auth-ferr">{{ e }}</small>{% endfor %}
+          </label>
+        {% endfor %}
+        {% if mode == "register" %}
+          <p class="auth-hint">Parol: kamida 8 belgi, faqat raqamdan iborat bo'lmasin, juda oddiy (12345678, password) bo'lmasin va emailingizga o'xshamasin.</p>
+          <button class="btn primary auth-btn" type="submit">Akkaunt yaratish</button>
+        {% else %}
+          <button class="btn primary auth-btn" type="submit">Kirish</button>
+        {% endif %}
+      </form>
+      <p class="auth-why">🔒 Parolingiz bazada ochiq saqlanmaydi — faqat uning xeshi (PBKDF2). Bu ham o'yindagi saboqlardan biri.</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vallum · Poligon</title>
+  <title>Vallum · startup quring</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{% static 'game/css/vallum.css' %}">
 </head>
 <body>
@@ -17,25 +17,40 @@
         <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 20V9l3-2v3l3-2v3l3-2 3 2V8l3 2V7l3 2v11z" fill="#cfe3b2" stroke="#1d1b18" stroke-width="1.5" stroke-linejoin="round"/></svg>
       </span>
       <span class="brand-name">Vallum</span>
-      <span class="brand-tag">Poligon</span>
+      <span class="brand-tag">backend o'yini</span>
     </div>
     <div class="rooms" id="rooms"></div>
     <div class="top-actions">
       <div class="balance" id="balance"></div>
       <span class="day-chip" id="dayChip" title="O'yin vaqti real vaqtda yuradi: 1 kun = 20 daqiqa. Siz yo'qligingizda ham hisoblanadi.">Kun 1 · 08:00</span>
-      <button class="btn ghost" id="btnTour" title="Yo'riqnoma: nima qayerda, nima qilish kerak">🎓<span class="hide-sm"> Yo'riqnoma</span></button>
-      <button class="btn ghost" id="btnReset" title="Startupni boshidan">↺</button>
+      <button class="btn ghost" id="btnTour" title="Yo'riqnoma: nima qayerda, nima qilish kerak"><i data-ico="cap"></i><span class="hide-sm"> Yo'riqnoma</span></button>
+      <button class="btn ghost icon" id="btnReset" title="Startupni boshidan boshlash"><i data-ico="reset"></i></button>
+      <form method="post" action="/chiqish/" class="me-box" title="Akkaunt">
+        {% csrf_token %}
+        <span class="me-email hide-sm" id="meEmail">{{ request.user.email }}</span>
+        <button class="btn ghost" type="submit" title="Akkauntdan chiqish">Chiqish</button>
+      </form>
     </div>
-    <nav class="tabs" id="tabs">
-      <button data-tab="board" class="tab active">▦ Doska</button>
-      <button data-tab="site" class="tab">🌐 Sayt</button>
-      <button data-tab="growth" class="tab">📈 O'sish</button>
-      <button data-tab="report" class="tab">📊 Hisobot</button>
-      <button data-tab="code" class="tab">{ } Kod</button>
-      <button data-tab="git" class="tab">⎇ Git</button>
-      <button data-tab="guide" class="tab">📖 Qo'llanma</button>
-    </nav>
   </header>
+
+  <!-- ============ YON PANEL (bo'limlar) ============ -->
+  <nav class="sidenav" id="tabs" aria-label="Bo'limlar">
+    <div class="sn-group">Qurish</div>
+    <button data-tab="board" class="tab active" title="Doska — serverlaringiz va tizim chizmasi"><i data-ico="board"></i><span>Doska</span></button>
+    <button data-tab="lesson" class="tab" title="Dars — 0 dan Django loyiha"><i data-ico="cap"></i><span>Dars</span></button>
+    <button data-tab="web" class="tab" title="Brauzer — hosting va domen saytlari"><i data-ico="browser"></i><span>Brauzer</span><em class="sn-new">yangi</em></button>
+    <button data-tab="code" class="tab" title="Kod — loyiha fayllari"><i data-ico="code"></i><span>Kod</span></button>
+    <button data-tab="git" class="tab" title="Git — GitHub repo"><i data-ico="git"></i><span>Git</span></button>
+    <div class="sn-group">Biznes</div>
+    <button data-tab="site" class="tab" title="Sayt — mijoz nimani ko'radi"><i data-ico="globe"></i><span>Sayt</span></button>
+    <button data-tab="growth" class="tab" title="O'sish — marketing"><i data-ico="trend"></i><span>O'sish</span></button>
+    <button data-tab="report" class="tab" title="Hisobot — pul"><i data-ico="chart"></i><span>Hisobot</span></button>
+    <div class="sn-group">Yordam</div>
+    <button data-tab="guide" class="tab" title="Qo'llanma"><i data-ico="book"></i><span>Qo'llanma</span></button>
+    <div class="sn-group staff-only hidden">Egasi</div>
+    <button data-tab="owner" class="tab staff-only hidden" title="Boshqaruv — o'yinchilar, vaqt, domenlar, serverlar, g'azna"><i data-ico="shield"></i><span>Boshqaruv</span></button>
+    <button class="sn-fold" id="navFold" title="Panelni ixchamlash / kengaytirish"><i data-ico="chevronLeft"></i><span>Yig'ish</span></button>
+  </nav>
 
   <!-- ============ HOLAT QATORI ============ -->
   <section class="stats" id="stats"></section>
@@ -70,14 +85,15 @@
       </div>
       <div class="bottom card">
         <div class="bottom-head">
-          <span class="eyebrow">📈 Kunlik natijalar</span>
+          <span class="eyebrow"><i data-ico="chart" data-size="13"></i> Kunlik natijalar</span>
           <span class="muted" id="econLine"></span>
+          <button class="link ch-toggle" id="chartToggle" title="Grafikni ko'rsatish / yashirish">grafik</button>
         </div>
         <div id="chart" class="chart"></div>
       </div>
       <div class="logs card">
         <div class="bottom-head">
-          <span class="eyebrow">📜 Loglar · jonli — saytingizda hozir nima bo'lyapti</span>
+          <span class="eyebrow"><i data-ico="log" data-size="13"></i> Loglar · jonli — saytingizda hozir nima bo'lyapti</span>
           <span class="log-ctl" id="logCtl"></span>
         </div>
         <div class="log-box" id="logBox"></div>
@@ -85,6 +101,12 @@
     </section>
     <aside class="right card" id="right"></aside>
   </main>
+
+  <!-- ============ DARS: 0 dan loyiha ============ -->
+  <main class="page page-lesson hidden" id="page-lesson"></main>
+
+  <!-- ============ BRAUZER: o'yin ichidagi internet ============ -->
+  <main class="page page-web hidden" id="page-web"></main>
 
   <!-- ============ SAYT (jonli ko'rinish + admin) ============ -->
   <main class="page page-site hidden" id="page-site"></main>
@@ -103,11 +125,22 @@
 
   <!-- ============ QO'LLANMA ============ -->
   <main class="page page-guide hidden" id="page-guide"></main>
+  <main class="page page-owner hidden" id="page-owner"></main>
 
   <div class="modal hidden" id="modal"><div class="modal-card card" id="modalCard"></div></div>
   <div class="toast hidden" id="toast"></div>
 
   {{ static_payload|json_script:"static-data" }}
-  <script type="module" src="{% static 'game/js/app.js' %}"></script>
+  {{ importmap|json_script:"im-data" }}
+  <script>
+    // import map: har modul URL iga ?v=<versiya> qo'shadi — fayl o'zgarsa brauzer yangisini oladi
+    (function () {
+      var s = document.createElement("script");
+      s.type = "importmap";
+      s.textContent = document.getElementById("im-data").textContent;
+      document.currentScript.after(s);
+    })();
+  </script>
+  <script type="module" src="{% static 'game/js/app.js' %}?v={{ app_v }}"></script>
 </body>
 </html>

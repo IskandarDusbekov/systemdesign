@@ -7,12 +7,17 @@
 // =========================================================================
 import { api } from "./api.js";
 import { renderBoard, initBoard, freeSpot } from "./board.js";
-import { renderStats, renderToolbar, renderRight, renderChart, renderGit, renderGuide, renderRooms, esc } from "./panels.js";
+import { renderStats, renderToolbar, renderRight, renderChart, renderGuide, renderRooms, esc } from "./panels.js";
+import { renderGit } from "./git.js";
+import { ico, hydrateIcons } from "./ui-icons.js";
 import { renderCode } from "./code.js";
 import { renderLaunchBar, openStep } from "./launch.js";
 import { initLogs, logPush, onLog } from "./logs.js";
 import { renderReport, usd } from "./report.js";
 import { renderSite, drawFeed } from "./site.js";
+import { renderLesson } from "./local.js";
+import { renderWeb, openUrl } from "./web.js";
+import { renderOwner } from "./owner.js";
 import { renderGrowth } from "./growth.js";
 import { startTour } from "./tour.js";
 import { demoBuild } from "./demo.js";
@@ -30,7 +35,8 @@ const $ = (id) => document.getElementById(id);
 let toastTimer = null;
 function toast(msg, isError = false, effect = "") {
   const t = $("toast");
-  t.innerHTML = esc(msg) + (effect ? `<div class="toast-effect">⚠ Real hayotda: ${esc(effect)}</div>` : "");
+  t.innerHTML = `<div class="toast-msg">${ico(isError ? "alert" : "check", 15)}<span>${esc(msg)}</span></div>`
+    + (effect ? `<div class="toast-effect"><b>Real hayotda:</b> ${esc(effect)}</div>` : "");
   t.className = "toast" + (isError ? " err" : "");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add("hidden"), isError ? (effect ? 8000 : 5000) : 2500);
@@ -111,6 +117,12 @@ const actions = {
   withdraw: () => run(api.withdraw()),
   saveAdmin: (cfg) => { ui.djDraft = null; run(api.saveAdmin(cfg)); },
   tour: () => boardTour(),
+  launchStep: (id) => {
+    if (id === "local") { actions.tab("lesson"); return; }      // 0-qadam — alohida Dars sahifasi
+    ui.tab = "board"; render(); openStep(id, state, data, actions);
+  },
+  toast: (m, err = true) => toast(m, err),
+  openWeb: (url) => { openUrl(url); actions.closeModal(); actions.tab("web"); },
   saveOffers: async (offers) => {
     const res = await run(api.offers(offers));
     if (res) { ui.offerDraft = null; render(); }
@@ -120,6 +132,10 @@ const actions = {
   rotate: (key) => run(api.rotate(key), `${key || "Hamma sirlar"} almashtirildi`),
   openFile: (path) => { ui.file = path; ui.tab = "code"; render(); },
   saveModels: (models) => run(api.models(models)),
+  dev: (task) => run(api.dev(task)),
+  profile: (user) => run(api.profile(user)),
+  web: (action, payload) => run(api.web(action, payload)),
+  djadmin: (action, payload) => run(api.djadmin(action, payload)),
   launch: async (step, payload, reopen = false) => {
     const res = await run(api.launch(step, payload));
     if (res) { if (reopen) openStep(step, state, data, actions); else actions.closeModal(); }
@@ -137,43 +153,90 @@ const actions = {
     ui.selected = null;
     run(api.deleteRoom(state.room.id), "Startup o'chirildi");
   },
+  refresh: () => api.state().then((r) => { absorb(r.state); render(); }).catch(() => {}),
   tab(name) {
+    if (name === "owner" && !state?.me?.staff) name = "board";
     ui.tab = name;
     render();
   },
   guide(ch) { ui.chapter = ch; actions.tab("guide"); },
-  closeModal: () => $("modal").classList.add("hidden"),
+  closeModal: () => { $("modal").classList.add("hidden"); $("modalCard").className = "modal-card card"; },
 };
 
-// --- Yangi xona oynasi ----------------------------------------------------
+// --- Yangi startup oynasi: 3 xil boshlash ------------------------------
+//   scratch — noldan, dasturchidek (terminal: venv, startproject, startapp ...)
+//   starter — tayyor shablon (kod va chizma bor, faqat 🚀)
+//   bought  — ishlab turgan biznesni sotib olish (qurish shart emas)
+const MODE_ICO = { scratch: "terminal", starter: "layers", bought: "store" };
+const MODE_STEPS = {
+  scratch: ["Terminal: papka, venv, Django", "startproject · startapp · static/media", "Server → domen → GitHub → deploy"],
+  starter: ["Kod va chizma tayyor", "🚀 5 qadam: server → SSL", "Keyin o'zingiz kengaytirasiz"],
+  bought: ["Domen, HTTPS, 300 mijoz", "Daromad darhol keladi", "Narx, reklama, o'sish"],
+};
+
+function modePickerHtml(selected = "scratch") {
+  const coins = state ? state.room.coins : 0;
+  return `<div class="mode-opts">${Object.entries(data.modes).map(([k, m]) => {
+    const poor = m.price > coins;
+    return `<label class="mode-opt ${poor ? "poor" : ""}">
+      <input type="radio" name="nrMode" value="${k}" ${k === selected ? "checked" : ""} ${poor ? "disabled" : ""}>
+      <span class="mode-ico">${ico(MODE_ICO[k], 22)}</span>
+      <b>${esc(m.title)}</b>
+      <span class="mode-price ${m.price ? "paid" : ""}">${m.price ? `$${m.price}` : "bepul"}</span>
+      <span class="mode-text">${esc(m.text)}</span>
+      <ul class="mode-steps">${MODE_STEPS[k].map((x) => `<li>${ico("check", 12)} ${esc(x)}</li>`).join("")}</ul>
+      ${poor ? `<span class="mode-warn">Balansda $${Math.floor(coins)} — yetmaydi</span>` : ""}
+    </label>`;
+  }).join("")}</div>`;
+}
+
+function bizSelectHtml() {
+  return `<select id="nrBiz">${Object.entries(data.catalog.businesses).map(([k, b]) =>
+    `<option value="${k}">${b.icon} ${esc(b.title)} — ${esc(b.pitch)}</option>`).join("")}</select>`;
+}
+
+const MODE_DONE = { scratch: "Yangi g'oya — noldan. 0-qadam: terminal", starter: "Tayyor shablon ochildi", bought: "Biznes sotib olindi" };
+
+function startMode(mode, name, biz) {
+  ui.selected = null; ui.offerDraft = null; ui.tab = "board";
+  return run(api.createRoom(mode, name, biz), MODE_DONE[mode]).then((res) => {
+    if (!res) return;
+    if (mode === "scratch") setTimeout(() => actions.tab("lesson"), 350);
+    else if (mode === "starter") setTimeout(boardTour, 300);
+  });
+}
+
 function openNewRoomModal() {
-  const biz = data.catalog.businesses;
+  $("modalCard").className = "modal-card card wide";
   $("modalCard").innerHTML = `
-    <h2>🚀 Yangi startup</h2>
-    <p class="muted">Har startup — alohida biznes: o'z serverlari, kodi, sayti, mijozlari va puli bilan.</p>
-    <label class="field">Startup nomi <input id="nrName" maxlength="80" placeholder="masalan: MyDokon"></label>
-    <h3>Qanday biznes ochasiz?</h3>
-    <div class="biz-opts">${Object.entries(biz).map(([k, b], i) => `
-      <label class="biz-opt"><input type="radio" name="nrBiz" value="${k}" ${i === 0 ? "checked" : ""}>
-        <span class="biz-ico">${b.icon}</span><b>${esc(b.title)}</b>
-        <span>${esc(b.pitch)}</span><span class="muted small">🧩 ${esc(b.learn)}</span>
-        <span class="small">Boshlang'ich: ${b.offers.map((o) => `${o.emoji} ${esc(o.name)} $${o.price}`).join(" · ")}</span></label>`).join("")}
+    <div class="md-head"><h2>${ico("sparkle", 20)} Yangi g'oya</h2>
+      <button class="icon-btn" id="nrClose" title="Yopish">${ico("x", 16)}</button></div>
+    <p class="muted">Har startup — alohida biznes: o'z serverlari, kodi, sayti, mijozlari va kassasi bilan.
+      Balans esa <b>umumiy</b> (hozir ${usd(state.room.coins)}) — xarajatlar shu bitta hamyondan.</p>
+    <div class="nr-row">
+      <label class="field">Startup nomi <input id="nrName" maxlength="80" placeholder="masalan: MyDokon"></label>
+      <label class="field">Biznes turi ${bizSelectHtml()}</label>
     </div>
-    <div class="tip info small">💰 Balans <b>umumiy</b> (hozir ${usd(state.room.coins)}): yangi startup alohida pul olmaydi —
-      uning serveri va xizmatlari ham shu bitta hamyondan to'lanadi. Har startupning o'z kassasi bor.</div>
-    <label class="kind-opt" style="margin-top:10px"><input type="checkbox" id="nrScenario">
-      <b>Yoki tayyor senariy: SmetaPro</b><span>Ishlab turgan kichik SaaS, maqsadlar va maslahatlar bilan (biznes tanlovi e'tiborga olinmaydi).</span></label>
-    <div class="row end"><button class="btn ghost" id="nrCancel">Bekor</button>
-      <button class="btn primary" id="nrOk">Startupni ochish</button></div>`;
+    <h3>Qanday boshlaysiz?</h3>
+    ${modePickerHtml()}
+    <div class="row nr-foot">
+      <button class="link" id="nrScenario" title="Ishlab turgan SaaS: 100 mijoz, maqsadlar va muammolar bilan">${ico("cap", 14)} yoki o'quv senariysi: SmetaPro</button>
+      <span class="row"><button class="btn ghost" id="nrCancel">Bekor</button>
+      <button class="btn primary" id="nrOk">Boshlash ${ico("arrowRight", 14)}</button></span></div>`;
   $("modal").classList.remove("hidden");
   $("nrName").focus();
   $("nrCancel").onclick = actions.closeModal;
-  $("nrOk").onclick = () => {
-    const scenario = $("nrScenario").checked;
-    const key = document.querySelector("input[name=nrBiz]:checked").value;
+  $("nrClose").onclick = actions.closeModal;
+  $("nrScenario").onclick = () => {
     actions.closeModal();
     ui.selected = null; ui.offerDraft = null;
-    run(api.createRoom(scenario ? "scenario" : "sandbox", $("nrName").value, key), "Startup ochildi");
+    run(api.createRoom("scenario", $("nrName").value || "SmetaPro"), "Senariy ochildi");
+  };
+  $("nrOk").onclick = () => {
+    const mode = document.querySelector("input[name=nrMode]:checked")?.value || "scratch";
+    const name = $("nrName").value, biz = $("nrBiz").value;
+    actions.closeModal();
+    startMode(mode, name, biz);
   };
 }
 
@@ -191,8 +254,8 @@ const ONB_STEPS = [
     (to'lov 2%, SMS kodi $0.02) ketadi. Daromad — saytingiz mijozlari xaridlaridan.`],
   ["⏱ Vaqt real yuradi", `1 o'yin kuni = 20 daqiqa. Siz yo'qligingizda ham hisob yuradi.
     Lekin <b>3 kundan ortiq kirmasangiz sayt to'xtaydi</b> — egasiz biznes ishlamaydi.`],
-  ["🚀 Birinchi vazifa", `Sizga tayyor kichik loyiha beramiz: <b>Nginx → Sayt → PostgreSQL</b> + to'lov.
-    Doska tepasidagi 🚀 qatorida bosqichma-bosqich serverga chiqarasiz, keyin o'zingiz kengaytirasiz.`],
+  ["🚀 Qanday boshlaysiz?", `<b>Noldan</b> — dasturchidek: terminalda loyiha yaratasiz (eng ko'p o'rgatadi).
+    <b>Tayyor shablon</b> — kod tayyor, faqat internetga chiqarasiz. <b>Sotib olish</b> — ishlab turgan biznes.`],
 ];
 
 function maybeOnboard() {
@@ -200,26 +263,25 @@ function maybeOnboard() {
   let i = 0;
   const draw = () => {
     const [t, body] = ONB_STEPS[i], last = i === ONB_STEPS.length - 1;
-    const biz = data.catalog.businesses;
     $("modalCard").innerHTML = `
       <div class="onb">
         <div class="onb-dots">${ONB_STEPS.map((_, k) => `<i class="${k === i ? "on" : k < i ? "done" : ""}"></i>`).join("")}</div>
         <h2>${t}</h2><p>${body}</p>
-        ${last ? `<label class="field">Startup nomi <input id="onbName" maxlength="80" value="Mening birinchi startupim"></label>
-          <label class="field">Biznes turi <select id="onbBiz">${Object.entries(biz).map(([k, b]) =>
-            `<option value="${k}">${b.icon} ${esc(b.title)} — ${esc(b.pitch)}</option>`).join("")}</select></label>` : ""}
+        ${last ? `<div class="nr-row"><label class="field">Startup nomi <input id="onbName" maxlength="80" value="Mening birinchi startupim"></label>
+          <label class="field">Biznes turi ${bizSelectHtml()}</label></div>${modePickerHtml()}` : ""}
         <div class="row" style="justify-content:space-between">
           <button class="btn ghost" id="onbSkip">O'tkazib yuborish</button>
           <span class="row">${i ? `<button class="btn ghost" id="onbBack">← Orqaga</button>` : ""}
-            ${last ? `<button class="btn" id="onbDemo" title="Bo'sh doskadan boshlab, tizim o'zi sudrab-ulab ko'rsatadi">🎬 Noldan qurib ko'rsat</button>` : ""}
-            <button class="btn primary" id="onbNext">${last ? "🚀 Tayyor loyiha" : "Keyingi →"}</button></span>
+            ${last ? `<button class="btn ghost" id="onbDemo" title="Bo'sh doskadan boshlab, tizim o'zi bloklarni sudrab-ulab ko'rsatadi">${ico("film", 14)} Doskani qurib ko'rsat</button>` : ""}
+            <button class="btn primary" id="onbNext">${last ? "Boshlash" : "Keyingi"} ${ico("arrowRight", 14)}</button></span>
         </div>
       </div>`;
+    $("modalCard").className = "modal-card card" + (last ? " wide" : "");
     $("modal").classList.remove("hidden");
     $("onbSkip").onclick = () => { onbMark(); actions.closeModal(); };
     if (i) $("onbBack").onclick = () => { i--; draw(); };
     if (last) $("onbDemo").onclick = () => {
-      const name = $("onbName").value || "Birinchi startup", key = $("onbBiz").value;
+      const name = $("onbName").value || "Birinchi startup", key = $("nrBiz").value;
       onbMark(); actions.closeModal();
       ui.selected = null; ui.tab = "board";
       run(api.createRoom("sandbox", name, key), "Bo'sh startup ochildi — kuzating").then(() => setTimeout(() =>
@@ -231,10 +293,10 @@ function maybeOnboard() {
     };
     $("onbNext").onclick = () => {
       if (!last) { i++; draw(); return; }
-      const name = $("onbName").value || "Birinchi startup", key = $("onbBiz").value;
+      const name = $("onbName").value || "Birinchi startup", key = $("nrBiz").value;
+      const mode = document.querySelector("input[name=nrMode]:checked")?.value || "scratch";
       onbMark(); actions.closeModal();
-      ui.selected = null; ui.tab = "board";
-      run(api.createRoom("starter", name, key), "Tayyor loyiha ochildi").then(() => setTimeout(boardTour, 300));
+      startMode(mode, name, key);
     };
   };
   draw();
@@ -243,7 +305,7 @@ function maybeOnboard() {
 
 // Ko'rsatmadan keyin: faqat 🚀 qadamini yoritib qo'yamiz
 function launchHint() {
-  startTour([{ el: ".lb-step.next", click: true, title: "🚀 Endi o'zingiz",
+  startTour([{ el: ".lb-step.next", click: true, title: "Endi o'zingiz",
     text: `Tizim chizildi va kod tayyor. Saytni internetga chiqarish — 5 qadam. Sariq tugma — <b>hozir qilinadigan qadam</b>.
       Har qadamda terminal bor: buyruqni o'zingiz yozasiz, ▶ tugmasi esa yozib ko'rsatadi.` }]);
 }
@@ -253,17 +315,19 @@ function boardTour() {
   ui.tab = "board"; render();
   const deployed = state.launch.done.deploy;
   startTour([
-    { el: "#board", title: "🗺 Sizning tizimingiz", text: `Bu — tayyor kichik loyiha: <b>Foydalanuvchilar → Nginx → Sayt → PostgreSQL</b>,
-      Saytga <b>To'lov shlyuzi</b> ulangan. Har blok bitta Server ichida ishlaydi. Blokni bossangiz — sozlamalari va kodi o'ngda ochiladi.` },
-    { el: "#toolbar", title: "🧩 Bloklar paneli", text: `Yangi qism kerak bo'lsa — shu yerdan doskaga sudrang va <b>●</b> nuqtadan strelka tortib ulang.
+    { el: "#board", title: "Sizning tizimingiz", text: state.blocks.length > 2
+      ? `Bu — tizim chizmasi: <b>Foydalanuvchilar → Nginx → Sayt → PostgreSQL</b>, Saytga <b>To'lov shlyuzi</b> ulangan.
+        Har blok bitta Server ichida ishlaydi. Blokni bossangiz — sozlamalari va kodi o'ngda ochiladi.`
+      : `Doska hozircha bo'sh — faqat <b>Foydalanuvchilar</b>. Bloklarni o'zingiz qo'yib, strelkalar bilan ulaysiz.` },
+    { el: "#toolbar", title: "Bloklar paneli", text: `Yangi qism kerak bo'lsa — shu yerdan doskaga sudrang va <b>●</b> nuqtadan strelka tortib ulang.
       Dasturlar bepul (kod), faqat Server ijarasi va tashqi xizmatlar pullik.` },
-    { el: "#stats", title: "📊 Holat qatori", text: deployed ? "Sayt holati, foydalanuvchilar, tezlik va xatolar shu yerda." :
+    { el: "#stats", title: "Holat qatori", text: deployed ? "Sayt holati, foydalanuvchilar, tezlik va xatolar shu yerda." :
       `Hozir <b>foydalanuvchi 0</b> — sayt hali internetda yo'q. <b>Deploy</b> qilinishi bilan birinchi <b>50 ta foydalanuvchi</b> keladi.` },
-    { el: "#balance", title: "💰 Balans va kassa", text: `Mijozlar to'lagan pul avval <b>To'lov shlyuzi kassasida</b> yig'iladi.
+    { el: "#balance", title: "Balans va kassa", text: `Mijozlar to'lagan pul avval <b>To'lov shlyuzi kassasida</b> yig'iladi.
       Uni balansga o'tkazish uchun <b>💰 Yechib olish</b> tugmasini bosing — kirib turmasangiz pul kassada qoladi, ijara esa balansdan ketaveradi.` },
-    { el: "#tabs", title: "🧭 Bo'limlar", text: `<b>Sayt</b> — saytingiz qanday ko'rinishi va narxlar, <b>O'sish</b> — reklama va yangi imkoniyatlar (SMS ham shu yerda),
+    { el: "#tabs", title: "Bo'limlar", text: `<b>Sayt</b> — saytingiz qanday ko'rinishi va narxlar, <b>O'sish</b> — reklama va yangi imkoniyatlar (SMS ham shu yerda),
       <b>Kod</b> — backend fayllari, <b>Qo'llanma</b> — har bir mavzu sodda tilda.` },
-    { el: ".lb-step.next", click: true, title: "🚀 Birinchi vazifa", text: deployed ? "Keyingi qadam shu yerda ajratilgan — bosing va ko'rsatmaga amal qiling." :
+    { el: ".lb-step.next", click: true, title: "Birinchi vazifa", text: deployed ? "Keyingi qadam shu yerda ajratilgan — bosing va ko'rsatmaga amal qiling." :
       `Saytni internetga chiqarish 5 qadam: Server → Domen → GitHub → Deploy → SSL. Sariq tugma — <b>hozir qilinadigan qadam</b>. Bosing!` },
   ], { onDone: () => { try { localStorage.setItem("vallum.toured", "1"); } catch { /* bo'sh */ } } });
 }
@@ -328,7 +392,7 @@ async function poll() {
     // foydalanuvchi yozayotgan / sudrayotgan / oyna ochiq bo'lsa — faqat yuqori qatorni yangilaymiz
     const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
     const modalOpen = !$("modal").classList.contains("hidden");
-    if (typing || modalOpen || pointerDown || ui.draft || ui.offerDraft) renderStats(state);
+    if (typing || modalOpen || pointerDown || ui.draft || ui.offerDraft) renderStats(state, actions);
     else render();
   } catch {}
 }
@@ -337,8 +401,10 @@ async function poll() {
 function render() {
   if (!state) return;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === ui.tab));
-  ["board", "site", "growth", "report", "code", "git", "guide"].forEach((p) => $("page-" + p).classList.toggle("hidden", ui.tab !== p));
-  renderStats(state);
+  ["board", "lesson", "web", "site", "growth", "report", "code", "git", "guide", "owner"].forEach((p) => $("page-" + p).classList.toggle("hidden", ui.tab !== p));
+  document.querySelectorAll(".staff-only").forEach((el) => el.classList.toggle("hidden", !state.me?.staff));
+  $("meEmail").textContent = state.me?.email || "";
+  renderStats(state, actions);
   renderRooms(state, actions);
   $("roomTitle").textContent = state.room.name;
   $("scenarioTitle").textContent = state.room.kind === "scenario" ? data.scenario.title
@@ -359,9 +425,15 @@ function render() {
   } else if (ui.tab === "report") {
     renderReport(state, actions);
   } else if (ui.tab === "git") {
-    renderGit(state);
+    renderGit(state, data, ui, actions);
   } else if (ui.tab === "guide") {
     renderGuide(data, ui, actions);
+  } else if (ui.tab === "web") {
+    renderWeb(state, data, ui, actions);
+  } else if (ui.tab === "lesson") {
+    renderLesson(state, data, ui, actions);
+  } else if (ui.tab === "owner") {
+    renderOwner(state, actions);
   }
 }
 
@@ -369,8 +441,13 @@ function render() {
 function bindTopbar() {
   $("tabs").addEventListener("click", (e) => {
     const t = e.target.closest("[data-tab]");
-    if (t) actions.tab(t.dataset.tab);
+    if (t) { actions.tab(t.dataset.tab); window.scrollTo({ top: 0 }); }
+    if (e.target.closest("#navFold")) {                   // yon panelni ixchamlash (faqat ikonlar)
+      document.body.classList.toggle("nav-mini");
+      try { localStorage.setItem("vallum.navmini", document.body.classList.contains("nav-mini") ? "1" : ""); } catch { /* bo'sh */ }
+    }
   });
+  try { if (localStorage.getItem("vallum.navmini")) document.body.classList.add("nav-mini"); } catch { /* bo'sh */ }
   $("btnReset").onclick = () => {
     if (!confirm("Startupni boshidan boshlaysizmi? Undagi hamma o'zgarishlar o'chadi.")) return;
     ui.selected = null;
@@ -393,6 +470,7 @@ function bindTopbar() {
   });
 }
 
+hydrateIcons();
 bindTopbar();
 $("legendFlows").innerHTML = Object.values(FLOWS).map((f) =>
   `<span class="lg-flow" title="${f.title}"><i style="background:${f.color}"></i>${f.label}</span>`).join("");

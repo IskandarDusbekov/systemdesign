@@ -78,6 +78,15 @@ export function renderBoard(context) {
         ${foot}
       </div>`;
   }).join("");
+  // Server yo'q: doska nima ekanini tushuntiramiz — bu sizning serverlaringiz
+  if (!state.blocks.some((b) => b.kind === "server")) {
+    nodes.insertAdjacentHTML("beforeend", `<div class="board-empty">
+      <b>Bu doska — sizning serverlaringiz</b>
+      <span>Saytingiz internetga ulangan, 24 soat yoqiq turadigan kompyuterda — <b>serverda</b> ishlaydi. Doskadagi har
+        <b>Server</b> bloki — ijaraga olingan bitta shunday kompyuter. Nginx, Sayt (Django), PostgreSQL, Redis — shu server
+        <i>ichida</i> ishlaydigan dasturlar, shuning uchun avval server kerak.</span>
+      <span class="be-go">↑ Yuqoridagi <b>Server</b> blokini shu yerga sudrang (yoki bosib → "Doskaga qo'shish")</span></div>`);
+  }
 
   fitZoom(state.blocks);
   drawEdges();

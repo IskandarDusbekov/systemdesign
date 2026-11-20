@@ -4,6 +4,7 @@
 //   (senariy / inspektor), kunlik grafik, Git sahifasi, Qo'llanma.
 // =========================================================================
 import { blockShape } from "./icons.js";
+import { ico } from "./ui-icons.js";
 import { usd } from "./report.js";
 import { hostColor } from "./board.js";
 
@@ -15,7 +16,7 @@ const pct = (x) => `${(x * 100).toFixed(x < 0.1 && x > 0 ? 1 : 0)}%`;
 // -------------------------------------------------------------------------
 // Holat qatori (yuqorida)
 // -------------------------------------------------------------------------
-export function renderStats(state) {
+export function renderStats(state, actions) {
   const r = state.room, m = state.metrics;
   const servers = state.blocks.filter((b) => b.kind === "server");
   const f = state.finance;
@@ -42,9 +43,38 @@ export function renderStats(state) {
   const kassa = state.kassa || 0;
   $("balance").innerHTML = `<span class="bal-l" title="Bitta hamyon — hamma startuplar uchun">Umumiy balans</span><b class="${r.coins < 0 ? "neg" : ""}">${usd(r.coins)}</b>
     <button class="kassa-btn ${kassa >= 1 ? "full" : ""}" data-withdraw title="To'lov shlyuzida yig'ilgan pul — bosib balansga o'tkazing">
-      💰 kassa ${usd(kassa)}${kassa >= 1 ? " · yechib olish" : ""}</button>
+      ${ico("wallet", 14)} kassa ${usd(kassa)}${kassa >= 1 ? " · yechib olish" : ""}</button>
     <span class="bal-s ${net > 0 ? "pos" : net < 0 ? "neg" : ""}">bugun ${usd(net, true)}</span>
-    <span class="bal-s ${month > 0 ? "pos" : month < 0 ? "neg" : ""}">30 kun ${usd(month, true)}</span>`;
+    <span class="bal-s ${month > 0 ? "pos" : month < 0 ? "neg" : ""}">30 kun ${usd(month, true)}</span>
+    ${walletHtml(state)}`;
+  const wb = $("walletBtn");
+  if (wb) {
+    wb.onclick = (e) => { e.stopPropagation(); walletOpen = !walletOpen; $("walletPop").classList.toggle("hidden", !walletOpen); };
+    $("walletPop").onclick = (e) => {
+      e.stopPropagation();
+      const b = e.target.closest("[data-wroom]");
+      if (b && actions?.openRoom) { walletOpen = false; actions.openRoom(Number(b.dataset.wroom)); }
+    };
+  }
+}
+
+// Hamyon: hamma startuplar bitta hamyondan to'laydi — qaysi biri qancha yeyapti
+let walletOpen = false;
+document.addEventListener("click", () => { if (walletOpen) { walletOpen = false; document.getElementById("walletPop")?.classList.add("hidden"); } });
+function walletHtml(state) {
+  const w = state.wallet;
+  if (!w || !w.rooms.length) return "";
+  return `<span class="wal">
+    <button class="wal-btn ${w.cost > 0 ? "neg" : ""}" id="walletBtn" title="Hamma startuplaringiz xarajati — bitta hamyondan">
+      ${ico("server", 13)} kuniga ${usd(-w.cost)} ${ico("chevronDown", 12)}</button>
+    <div class="wal-pop ${walletOpen ? "" : "hidden"}" id="walletPop">
+      <div class="wal-h"><b>Hamyondan kim to'layapti</b><span>kuniga ${usd(-w.cost)}</span></div>
+      <p class="muted small">Hamma startuplaringiz shu bitta balansdan to'laydi — ochilmagan bo'lsa ham. Pul tejash uchun
+        keraksiz startupdagi serverni o'chiring (Brauzer → Bulutxon → Serverlarim) yoki startupni o'chiring.</p>
+      ${w.rooms.map((r) => `<button class="wal-row ${r.current ? "cur" : ""}" data-wroom="${r.id}">
+        <span><b>${esc(r.name)}</b><small>${r.servers} server${r.stopped ? " · to'xtatilgan" : ""}${r.kassa >= 1 ? ` · kassada ${usd(r.kassa)}` : ""}</small></span>
+        <em class="${r.cost > 0 ? "neg" : "muted"}">${r.cost > 0 ? usd(-r.cost) + "/kun" : "$0"}</em></button>`).join("")}
+    </div></span>`;
 }
 
 // -------------------------------------------------------------------------
@@ -56,9 +86,9 @@ export function renderRooms(state, actions) {
     <select id="roomSel" title="Startupni almashtirish">
       ${state.rooms.map((r) => `<option value="${r.id}" ${r.id === state.room.id ? "selected" : ""}>${r.kind === "scenario" ? "★" : "💡"} ${esc(r.name)} · kun ${r.day}</option>`).join("")}
     </select>
-    <button class="btn small" id="roomNew" title="Yangi startup yoki g'oya">＋ Yangi g'oya</button>
-    <button class="btn small ghost" id="roomRen" title="Nomini o'zgartirish">✎</button>
-    <button class="btn small ghost" id="roomDel" title="Startupni o'chirish">🗑</button>`;
+    <button class="btn small" id="roomNew" title="Yangi startup: noldan, tayyor shablon yoki sotib olish">${ico("plus", 14)} Yangi g'oya</button>
+    <button class="icon-btn" id="roomRen" title="Nomini o'zgartirish">${ico("edit", 15)}</button>
+    <button class="icon-btn" id="roomDel" title="Startupni o'chirish">${ico("trash", 15)}</button>`;
   $("roomSel").onchange = (e) => actions.openRoom(Number(e.target.value));
   $("roomNew").onclick = actions.newRoom;
   $("roomRen").onclick = actions.renameRoom;
@@ -71,15 +101,19 @@ export function renderRooms(state, actions) {
 export function renderToolbar(state, catalog, actions) {
   const count = {};
   state.blocks.forEach((b) => { count[b.kind] = (count[b.kind] || 0) + 1; });
+  const noServer = !count.server;      // server yo'q — boshqa bloklar yopiq (ular server ichida ishlaydi)
   const groups = catalog.layers.map(([layer, title]) => {
     const items = Object.entries(catalog.blocks)
       .filter(([, s]) => s.layer === layer && !s.fixed)
       .map(([kind, s]) => {
         const n = count[kind] || 0;
         const full = n >= s.max_count;
+        const locked = noServer && kind !== "server";
         const price = kind === "server" ? `$${catalog.servers.orta.rent}/kun` : s.rent ? `$${s.rent}/kun` : s.external ? "foiz/so'rov" : "bepul";
         const res = s.external ? "tashqi xizmat" : kind === "server" ? "ijara · 2 CPU" : `kod · ${s.cpu}${s.per_unit ? "+" : ""} CPU`;
-        return `<div class="tool ${full ? "disabled" : ""}" draggable="${!full}" data-kind="${kind}">
+        return `<div class="tool ${full || locked ? "disabled" : ""} ${locked ? "locked" : ""} ${noServer && kind === "server" ? "pulse" : ""}"
+          draggable="${!full && !locked}" data-kind="${kind}" ${locked ? `title="Avval Server qo'shing — bu blok server ichida ishlaydi"` : ""}>
+          ${locked ? `<span class="tool-lock">${ico("lock", 11)}</span>` : ""}
           <div class="tool-ico">${blockShape(s)}</div>
           <div class="tool-t">${esc(s.title)}</div>
           <div class="tool-s">${price} · ${res}</div>
@@ -88,10 +122,13 @@ export function renderToolbar(state, catalog, actions) {
       }).join("");
     return `<div class="tool-group"><div class="tool-h">${esc(title)}</div><div class="tool-row">${items}</div></div>`;
   }).join("");
-  $("toolbar").innerHTML = `${groups}
+  const lockNote = noServer ? `<div class="tool-note">${ico("server", 15)}<div><b>Avval Server.</b> Doska — bu sizning serverlaringiz:
+      Nginx, Sayt, baza... hammasi server ichida ishlaydigan dasturlar. Server qo'ymaguningizcha ularni qo'yadigan joy yo'q.
+      <b>Server</b> blokini doskaga sudrang.</div></div>` : "";
+  $("toolbar").innerHTML = `${lockNote}${groups}
     <div class="tool-group tool-power"><div class="tool-h">Narxlar</div>
-      <div class="tool-s">💻 Dasturlar (Nginx, Django, Postgres...) — <b>bepul</b>, bu kod.<br>
-      💳 Pul faqat: server ijarasi, domen va tashqi xizmatlar (CDN, to'lov 2%, SMS).<br>
+      <div class="tool-s">${ico("code", 12)} Dasturlar (Nginx, Django, Postgres...) — <b>bepul</b>, bu kod.<br>
+      ${ico("wallet", 12)} Pul faqat: server ijarasi, domen va tashqi xizmatlar (CDN, to'lov 2%, SMS).<br>
       Blok ustiga keling — tushuntirish chiqadi.</div>
     </div>`;
   $("toolbar").querySelectorAll(".tool").forEach((el) => {
@@ -142,6 +179,7 @@ function showPop(anchor, state, catalog, actions, pin) {
   const kind = anchor.dataset.kind, s = catalog.blocks[kind];
   const n = state.blocks.filter((b) => b.kind === kind).length;
   const full = n >= s.max_count;
+  const locked = kind !== "server" && !state.blocks.some((b) => b.kind === "server");
   const price = kind === "server" ? catalog.servers.orta.rent : 0;
   const reqs = (catalog.requirements[kind] || []).map((r) => `<li>${esc(r.text)}</li>`).join("");
   const res = s.external ? "Tashqi xizmat — serverga joylanmaydi"
@@ -157,8 +195,8 @@ function showPop(anchor, state, catalog, actions, pin) {
     ${reqs ? `<div class="tp-req"><b>Ishlashi uchun ulang:</b><ul>${reqs}</ul></div>` : ""}
     ${whatIf(kind, s, state, catalog)}
     <div class="row" style="justify-content:space-between;margin-top:8px">
-      ${s.guide ? `<button class="link" id="tpGuide">📖 qo'llanma</button>` : "<span></span>"}
-      <button class="btn primary small" id="tpAdd" ${full ? "disabled" : ""}>${full ? `ko'pi bilan ${s.max_count} ta` : "＋ Doskaga qo'shish"}</button>
+      ${s.guide ? `<button class="link" id="tpGuide">${ico("book", 13)} qo'llanma</button>` : "<span></span>"}
+      <button class="btn primary small" id="tpAdd" ${full || locked ? "disabled" : ""}>${locked ? `${ico("lock", 12)} avval Server` : full ? `ko'pi bilan ${s.max_count} ta` : "＋ Doskaga qo'shish"}</button>
     </div>`;
   const r = anchor.getBoundingClientRect();
   el.classList.remove("hidden");
@@ -223,14 +261,14 @@ function runwayText(state) {
 export function suspendedHtml(state) {
   const f = state.finance;
   if (!state.suspended && state.neglected) return `<div class="suspended neglect">
-    <b>⏸ Sayt to'xtadi — siz uzoq kirmadingiz</b>
+    <b>${ico("pause", 15)} Sayt to'xtadi — siz uzoq kirmadingiz</b>
     <p>Egasi 3 kundan ortiq kelmasa, tizim o'zi ishlamaydi: buyurtmalar kelmaydi, lekin server ijarasi to'lanib turadi.
       Har kuni bir marta kirib, holatni tekshirib turing.</p>
     <p>Yoqilsa: <b class="${f.net >= 0 ? "pos" : "neg"}">${usd(f.net, true)}/kun</b>.</p>
     <button class="btn primary" data-resume>▶ Saytni qayta yoqish</button></div>`;
   if (!state.suspended) return "";
   return `<div class="suspended">
-    <b>⛔ Hosting to'xtatildi${state.suspended_at ? ` (${esc(state.suspended_at)})` : ""}</b>
+    <b>${ico("power", 15)} Hosting to'xtatildi${state.suspended_at ? ` (${esc(state.suspended_at)})` : ""}</b>
     <p>Balans tugadi — serverlar o'chirildi. Sayt ishlamayapti, pul ham ketmayapti. Mijozlar kuniga ~3% kamayadi.</p>
     <p>Qayta yoqilsa: daromad ${usd(f.revenue, true)}, xarajat ${usd(-f.cost)} → <b class="${f.net >= 0 ? "pos" : "neg"}">${usd(f.net, true)}/kun</b>.
       ${f.net < 0 ? "Zarar bilan yoqsangiz — tez orada yana to'xtaydi. Avval server turini kichraytiring yoki keraksiz bloklarni o'chiring." : ""}</p>
@@ -242,7 +280,7 @@ function financeHtml(state) {
   const f = state.finance, r = state.room;
   const sign = (x) => usd(x, true);
   return `<div class="fin">
-    <div class="fin-h">💰 Moliya · bugun</div>
+    <div class="fin-h">${ico("coins", 15)} Moliya · bugun</div>
     ${[...state.growth.campaigns.map((c) => `📣 ${c.id}`), ...state.growth.effects.map((e) => e.title)].length
       ? `<div class="fin-why">Faol: ${[...state.growth.campaigns.map((c) => `📣 kampaniya (${c.days_left} kun)`),
           ...state.growth.effects.map((e) => `${esc(e.title)} (${e.days_left} kun)`)].join(" · ")}</div>` : ""}
@@ -251,12 +289,12 @@ function financeHtml(state) {
     ${f.items.map((i) => `<div class="fin-row out"><span>${esc(i.label)}</span><b>${usd(-i.amount)}</b></div>`).join("")}
     <div class="fin-row total ${f.net >= 0 ? "pos" : "neg"}"><span>Sof natija</span><b>${sign(f.net)} / kun</b></div>
     <div class="fin-row"><span>Balans: hozir</span><b>${usd(r.coins)}</b></div>
-    <div class="fin-row in"><span>💰 To'lov kassasida</span><b>${usd(state.kassa || 0)}</b></div>
+    <div class="fin-row in"><span>${ico("wallet", 13)} To'lov kassasida</span><b>${usd(state.kassa || 0)}</b></div>
     <div class="fin-why">Mijoz to'lovlari avval To'lov shlyuzida yig'iladi. Xarajat esa balansdan ketadi — vaqtida yechib oling.
-      ${(state.kassa || 0) >= 1 ? `<button class="btn small primary" data-withdraw>💰 Yechib olish</button>` : ""}</div>
+      ${(state.kassa || 0) >= 1 ? `<button class="btn small primary" data-withdraw>${ico("download", 13)} Yechib olish</button>` : ""}</div>
     ${f.runway !== null && !state.suspended ? `<div class="tip ${f.runway <= 1 ? "bad" : "warn"}">Zarar: balans taxminan <b>${runwayText(state)}</b> ga yetadi.
       Tugasa — hosting serverlarni to'xtatadi (sayt ishlamaydi, mijozlar kamayadi). ${f.revenue ? "Xarajatni kamaytiring." : "Avval To'lov shlyuzi + HTTPS."}
-      <button class="link" data-guide="money">📖 Pul</button></div>` : ""}
+      <button class="link" data-guide="money">${ico("book", 13)} Pul</button></div>` : ""}
   </div>`;
 }
 
@@ -265,16 +303,24 @@ function renderOverview(state, data, actions) {
   const goals = state.goals.map((g) => `
     <div class="goal ${g.done ? "done" : ""}"><span class="box">${g.done ? "✓" : ""}</span>
       <div><div class="txt">${esc(g.text)}</div>
-      ${g.hint && !g.done ? `<button class="link" data-guide="${g.hint}">📖 qo'llanma</button>` : ""}</div></div>`).join("");
+      ${g.hint && !g.done ? `<button class="link" data-guide="${g.hint}">${ico("book", 13)} qo'llanma</button>` : ""}</div></div>`).join("");
   const tips = state.advice.map((t) => `
     <div class="tip ${t.level}">${esc(t.text)}
       ${(t.guide || t.block) ? `<div class="links">
         ${t.block ? `<button class="link" data-block="${t.block}">→ blokni ochish</button>` : ""}
-        ${t.guide && data.guide[t.guide] ? `<button class="link" data-guide="${t.guide}">📖 ${esc(data.guide[t.guide].title.split(". ")[0])}-bob</button>` : ""}
+        ${t.guide && data.guide[t.guide] ? `<button class="link" data-guide="${t.guide}">${ico("book", 13)} ${esc(data.guide[t.guide].title)}</button>` : ""}
       </div>` : ""}</div>`).join("");
+  const dev = state.dev;
   const intro = r.kind === "scenario"
     ? data.scenario.intro.map(esc).join("<br>")
-    : `<b>${esc(r.name)}</b> — yangi startup. Yuqoridagi paneldan bloklarni qo'shing:<br>
+    : dev.scratch && !dev.finished
+      ? `<b>${esc(r.name)}</b> — noldan, dasturchidek. Avval kompyuteringizda loyiha yarating:
+         terminalda papka, venv, Django, app, static va media (${dev.done}/${dev.total}).
+         <button class="btn small primary intro-btn" data-launch="local">${ico("terminal", 13)} Terminalni ochish</button>`
+    : state.mode === "bought"
+      ? `<b>${esc(r.name)}</b> — sotib olingan, ishlab turgan biznes. Sayt internetda, mijozlar xarid qilyapti.
+         Endi vazifangiz — boshqarish: narxlar (Sayt bo'limi), reklama (O'sish), yuklama oshsa — tizimni kengaytirish.`
+      : `<b>${esc(r.name)}</b> — yangi startup. Yuqoridagi paneldan bloklarni qo'shing:<br>
        Foydalanuvchilar → Nginx → Sayt → PostgreSQL zanjirini quring. Har xizmat qaysi serverda ishlashini inspektorda tanlang.`;
 
   $("right").innerHTML = `
@@ -286,6 +332,7 @@ function renderOverview(state, data, actions) {
     <h3>Serverlar</h3>${serversHtml(state) || `<p class="muted">Server yo'q — asboblar panelidan qo'shing.</p>`}`;
 
   $("right").querySelectorAll("[data-guide]").forEach((el) => el.onclick = () => actions.guide(el.dataset.guide));
+  $("right").querySelectorAll("[data-launch]").forEach((el) => el.onclick = () => actions.launchStep(el.dataset.launch));
   $("right").querySelectorAll("[data-resume]").forEach((el) => el.onclick = () => actions.resume());
   $("right").querySelectorAll("[data-block]").forEach((el) => el.onclick = () => actions.selectBlock(Number(el.dataset.block)));
 }
@@ -353,7 +400,7 @@ function renderInspector(block, state, data, ui, actions) {
   // Server tanlash (xizmat uchun) yoki server ichidagi xizmatlar ro'yxati (server uchun)
   let hostHtml = "";
   if (needsHost) {
-    hostHtml = `<div class="host-row"><span>▣ Server:</span>
+    hostHtml = `<div class="host-row"><span>${ico("server", 13)} Server:</span>
       <select id="hostSel">${block.host ? "" : `<option value="">— tanlang —</option>`}
         ${servers.map((s) => `<option value="${s.id}" ${s.id === block.host ? "selected" : ""}>${esc(s.name)} · ${esc(s.ip)}</option>`).join("")}
       </select></div>`;
@@ -373,14 +420,14 @@ function renderInspector(block, state, data, ui, actions) {
   $("right").innerHTML = `
     <div class="row" style="justify-content:space-between">
       <input class="name-input" id="nameInp" value="${esc(block.name)}" maxlength="40" title="Blok nomi">
-      <button class="btn small ghost" id="btnClose">✕</button></div>
+      <button class="icon-btn" id="btnClose" title="Yopish">${ico("x", 15)}</button></div>
     <div class="muted" style="margin:2px 0 4px"><b>${esc(spec.title)}</b> · ${esc(spec.about)}</div>
     ${hostHtml}
     <div class="res-pills">
       ${spec.external ? `<span class="pill">tashqi xizmat</span>` : isServer ? "" : `<span class="pill">${res.cpu} CPU</span><span class="pill">${res.ram} MB</span><span class="pill">${res.power} W</span>`}
       ${label && !isServer ? `<span class="pill">${esc(label)}</span>` : ""}
     </div>
-    <div class="file-name">📄 ${esc(code.file)}</div>
+    <div class="file-name">${ico("fileCode", 13)} ${esc(code.file)}</div>
     <div class="code" id="codeBox">${lines}</div>
     <div class="row end" style="margin-top:10px">
       ${spec.fixed ? "" : `<button class="btn danger" id="btnDel">O'chirish</button>`}
@@ -388,7 +435,7 @@ function renderInspector(block, state, data, ui, actions) {
     </div>
     ${block.kind === "postgres" ? tablesHtml(state) : ""}
     ${isServer ? "" : requirementsHtml(block, state, data) + linksHtml(block, state)}
-    ${spec.guide && data.guide[spec.guide] ? `<p><button class="link" data-guide="${spec.guide}">📖 ${esc(data.guide[spec.guide].title)}</button></p>` : ""}`;
+    ${spec.guide && data.guide[spec.guide] ? `<p><button class="link" data-guide="${spec.guide}">${ico("book", 13)} ${esc(data.guide[spec.guide].title)}</button></p>` : ""}`;
 
   bindFields($("codeBox"), spec.fields, cfg, rerender);
   $("btnClose").onclick = () => actions.select(null);
@@ -474,7 +521,7 @@ function serverAdvice(block, state, data, inside, h, tier) {
   const pick = (kind) => others.find((b) => b.kind === kind);
   const tips = [];
   if (!inside.length) {
-    tips.push(`<p><b>Bu server bo'sh</b> — kuniga $${tier.rent} ijara + elektr yeydi, lekin hech narsa qilmaydi. Variantlar:</p>`);
+    tips.push(`<p><b>Bu server bo'sh</b> — kuniga $${tier.rent} ijara yeydi, lekin hech narsa qilmaydi. Variantlar:</p>`);
     const pg = pick("postgres");
     if (pg) tips.push(`<div class="adv"><b>1. Bazani ajratish.</b> PostgreSQL alohida serverda — Sayt uchun CPU bo'shaydi.
       <button class="btn small" data-movehere="${pg.id}:${block.id}">🗄 ${esc(pg.name)} ni shu yerga ko'chirish</button></div>`);
@@ -483,7 +530,7 @@ function serverAdvice(block, state, data, inside, h, tier) {
       keyin Nginx → LB → ikkala Sayt ulang.
       <div class="req-acts"><button class="btn small" data-addkind="app" data-host="${block.id}">＋ Shu serverga Sayt</button>
       ${lb ? "" : `<button class="btn small" data-addkind="lb">＋ Load Balancer</button>`}
-      <button class="link" data-guide="lb">📖 qadamlar</button></div></div>`);
+      <button class="link" data-guide="lb">${ico("book", 13)} qadamlar</button></div></div>`);
     ["worker", "redis", "tgbot"].forEach((k) => {
       const b = pick(k);
       if (b) tips.push(`<div class="adv"><button class="btn small" data-movehere="${b.id}:${block.id}">↪ ${esc(b.name)} ni shu yerga ko'chirish</button></div>`);
@@ -503,7 +550,7 @@ function tablesHtml(state) {
     <div class="kv small"><span class="mono">auth_user</span><span class="muted">Django</span></div>
     ${models.map((m) => `<div class="kv small"><span class="mono">app_${esc(m.name.toLowerCase())}</span>
       <span>${m.fields.length + 1} ustun</span></div>`).join("")}
-    <button class="link" data-openfile="app/models.py">🗄 Model quruvchini ochish →</button>`;
+    <button class="link" data-openfile="app/models.py">${ico("layers", 13)} Model quruvchini ochish</button>`;
 }
 
 function resourcesOf(cfg, spec) {
@@ -518,16 +565,26 @@ function resourcesOf(cfg, spec) {
 // -------------------------------------------------------------------------
 // Kunlik grafik: chiziq — foydalanuvchilar, ustunlar — p95 (holat rangida)
 // -------------------------------------------------------------------------
+// Grafik standart holatda yig'ilgan (joy egallamasin) — "grafik" tugmasi bilan ochiladi
+function chartOpen() { try { return localStorage.getItem("vallum.chart") === "1"; } catch { return false; } }
 export function renderChart(state) {
   const h = state.history.slice(-30);
   const el = $("chart");
+  const open = chartOpen();
+  el.classList.toggle("hidden", !open);
+  const tg = $("chartToggle");
+  if (tg) {
+    tg.innerHTML = `${ico(open ? "chevronDown" : "chevronRight", 12)} ${open ? "yashirish" : "grafikni ko'rsatish"}`;
+    tg.onclick = () => { try { localStorage.setItem("vallum.chart", open ? "" : "1"); } catch { /* bo'sh */ } renderChart(state); };
+  }
+  if (!open) return;
   if (!h.length) {
     el.innerHTML = `<div class="ch-empty">Birinchi o'yin kuni tugagach (20 daqiqa) bu yerda grafik paydo bo'ladi:
       foydalanuvchilar soni va har kungi foyda.</div>`;
     return;
   }
-  const W = Math.max(260, Math.floor((el.clientWidth || 900) / 2) - 12), H = 150;
-  const P = { l: 44, r: 10, t: 12, b: 22 };
+  const W = Math.max(260, Math.floor((el.clientWidth || 900) / 2) - 12), H = 96;
+  const P = { l: 44, r: 10, t: 8, b: 18 };
   const iw = W - P.l - P.r, ih = H - P.t - P.b, n = h.length;
   const step = iw / n;
   const xc = (i) => P.l + step * (i + 0.5);
@@ -570,37 +627,13 @@ export function renderChart(state) {
 
   const last = h[n - 1], sum = nets.reduce((x, y) => x + y, 0);
   el.innerHTML = `
-    <div class="ch-box"><div class="ch-h"><b>👥 Foydalanuvchilar</b><span>${fmt(last.users)} · nuqta rangi = sayt holati</span></div>${users}</div>
-    <div class="ch-box"><div class="ch-h"><b>💵 Kunlik foyda</b><span class="${sum >= 0 ? "pos" : "neg"}">${n} kunda ${usd(sum, true)}</span></div>${money}</div>`;
+    <div class="ch-box"><div class="ch-h"><b>${ico("users", 14)} Foydalanuvchilar</b><span>${fmt(last.users)} · nuqta rangi = sayt holati</span></div>${users}</div>
+    <div class="ch-box"><div class="ch-h"><b>${ico("coins", 14)} Kunlik foyda</b><span class="${sum >= 0 ? "pos" : "neg"}">${n} kunda ${usd(sum, true)}</span></div>${money}</div>`;
 }
 
 // -------------------------------------------------------------------------
 // Git sahifasi — "kod qayerdan keldi, nima o'zgardi"
 // -------------------------------------------------------------------------
-export function renderGit(state) {
-  const commits = state.commits.map((c) => `
-    <div class="commit">
-      <div class="commit-head"><span class="sha">${esc(c.sha)}</span><b>${esc(c.message)}</b>
-        <span class="muted">kun ${c.day}${c.file ? " · " + esc(c.file) : ""}</span></div>
-      ${c.diff.length ? `<div class="diff">${c.diff.map((l) => {
-        const cls = l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "";
-        return `<div class="${cls}">${esc(l) || " "}</div>`;
-      }).join("")}</div>` : ""}
-    </div>`).join("");
-  const leaked = state.commits.some((c) => c.file === ".env" && c.diff.some((l) => l.includes("SECRET_KEY")));
-  $("page-git").innerHTML = `
-    <aside class="card">
-      <h2>⎇ ${esc(state.room.name.toLowerCase().replace(/\s+/g, "-"))} / infra</h2>
-      <p class="muted">Bu real Git emas — o'quv daftari. Doskadagi va Kod bo'limidagi har bir o'zgarish
-      (blok, strelka, sozlama, sir) shu yerda kommit bo'lib qoladi.</p>
-      ${leaked ? `<div class="tip warn">Tarixda <b>.env</b> fayli bor — undagi SECRET_KEY ochiq ko'rinadi.
-        Faylni o'chirish yetmaydi: "Kod" bo'limida kalitni <b>almashtiring</b> va .env ni .gitignore ga qo'shing.</div>` : ""}
-      <div class="tip info">Saboq: Git tarixi abadiy. Sir kommitga tushsa — yagona to'g'ri javob rotate.</div>
-      <div class="kv"><span>Kommitlar</span><b>${state.commits.length}</b></div>
-    </aside>
-    <section class="card">${commits || '<p class="muted">Kommitlar yo\'q</p>'}</section>`;
-}
-
 // -------------------------------------------------------------------------
 // Qo'llanma sahifasi
 // -------------------------------------------------------------------------
@@ -611,9 +644,11 @@ function guideBlock(b) {
   if (b.p) return `<p>${esc(b.p)}</p>`;
   if (b.steps) return `<ol class="g-steps">${b.steps.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`;
   if (b.list) return `<ul class="g-list">${b.list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
-  if (b.tip) return `<div class="g-tip">💡 ${esc(b.tip)}</div>`;
-  if (b.warn) return `<div class="g-warn">⚠ ${esc(b.warn)}</div>`;
+  if (b.tip) return `<div class="g-tip">${ico("bulb", 16)}<span>${esc(b.tip)}</span></div>`;
+  if (b.warn) return `<div class="g-warn">${ico("alert", 16)}<span>${esc(b.warn)}</span></div>`;
   if (b.code) return `<pre class="term">${b.code.map(esc).join("\n")}</pre>`;
+  if (b.cmds || b.files) return `<div class="g-cmd">${(b.cmds || b.files).map(([k, d]) =>
+    `<div><code>${esc(k)}</code></div><div class="g-cmd-d">${esc(d)}</div>`).join("")}</div>`;
   return "";
 }
 
@@ -623,19 +658,26 @@ export function renderGuide(data, ui, actions) {
   const ch = data.guide[current];
   const idx = keys.indexOf(current);
   const prev = keys[idx - 1], next = keys[idx + 1];
+  let part = "";
+  const nav = keys.map((k, n) => {
+    const c = data.guide[k];
+    const head = c.part && c.part !== part ? `<div class="g-part">${esc(c.part)}</div>` : "";
+    part = c.part || part;
+    return `${head}<button class="chapter-btn ${k === current ? "active" : ""}" data-ch="${k}"><span class="g-num">${n + 1}</span>${esc(c.title)}</button>`;
+  }).join("");
   $("page-guide").innerHTML = `
-    <aside class="card g-nav"><h2>📖 Qo'llanma</h2>
+    <aside class="card g-nav"><h2>${ico("book", 18)} Qo'llanma</h2>
       <p class="muted">Noldan to tayyor tizimgacha. Tartib bilan o'qing.</p>
-      ${keys.map((k) => `<button class="chapter-btn ${k === current ? "active" : ""}" data-ch="${k}">${esc(data.guide[k].title)}</button>`).join("")}
+      ${nav}
     </aside>
     <section class="card g-main"><article class="g-article">
-      <div class="eyebrow">${idx + 1} / ${keys.length}</div>
+      <div class="eyebrow">${esc(ch.part || "")} · ${idx + 1} / ${keys.length}</div>
       <h1>${esc(ch.title)}</h1>
       ${ch.lead ? `<p class="g-lead">${esc(ch.lead)}</p>` : ""}
       ${(ch.body || []).map((b) => (typeof b === "string" ? `<p>${esc(b)}</p>` : guideBlock(b))).join("")}
       <div class="g-pager">
-        ${prev ? `<button class="btn" data-ch="${prev}">← ${esc(data.guide[prev].title)}</button>` : "<span></span>"}
-        ${next ? `<button class="btn primary" data-ch="${next}">${esc(data.guide[next].title)} →</button>` : ""}
+        ${prev ? `<button class="btn" data-ch="${prev}">${ico("arrowLeft", 14)} ${esc(data.guide[prev].title)}</button>` : "<span></span>"}
+        ${next ? `<button class="btn primary" data-ch="${next}">${esc(data.guide[next].title)} ${ico("arrowRight", 14)}</button>` : ""}
       </div>
     </article></section>`;
   $("page-guide").querySelectorAll("[data-ch]").forEach((el) => el.onclick = () => { actions.guide(el.dataset.ch); window.scrollTo(0, 0); });

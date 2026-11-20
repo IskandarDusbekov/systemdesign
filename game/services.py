@@ -22,8 +22,8 @@ from django.utils import timezone
 
 import re
 
-from . import business, growth, catalog, engine, guide, launch, project, rules, scenario
-from .models import Block, Commit, Connection, Room
+from . import business, devsetup, growth, catalog, engine, guide, launch, project, rules, scenario
+from .models import Block, Commit, Connection, Ledger, Room
 
 LAYOUT_VERSION = 3          # eski xonalar yangilanadi (upgrade_room)
 
@@ -39,15 +39,20 @@ class GameError(Exception):
 # ---------------------------------------------------------------------------
 # Xonalar
 # ---------------------------------------------------------------------------
-def get_room():
-    """Hozir ochiq xona. Hech narsa bo'lmasa — senariy xonasi yaratiladi."""
-    for old in Room.objects.exclude(flags__version=LAYOUT_VERSION):
+def mine(owner):
+    """O'yinchining startuplari (owner=None — akkauntsiz/test startuplar)."""
+    return Room.objects.filter(owner_id=getattr(owner, "pk", owner))
+
+
+def get_room(owner=None):
+    """O'yinchining hozir ochiq startupi. Hech narsa bo'lmasa — senariy startupi yaratiladi."""
+    for old in mine(owner).exclude(flags__version=LAYOUT_VERSION):
         upgrade_room(old)
-    room = Room.objects.filter(active=True).first() or Room.objects.first()
+    room = mine(owner).filter(active=True).first() or mine(owner).first()
     if room is None:
-        room = create_room("scenario")
+        room = create_room("scenario", owner=owner)
     if not room.active:
-        Room.objects.update(active=False)
+        mine(owner).update(active=False)
         room.active = True
         room.save(update_fields=["active"])
     return room
@@ -86,21 +91,33 @@ def ensure_scenario_payment(room):
 
 
 @transaction.atomic
-def create_room(kind, name=None, biz=None, invest=0, coins=None):
-    """Yangi startup. Balans umumiy: yangi startup yangi pul bermaydi — hamma xarajat bitta hamyondan."""
-    start = (scenario.SCENARIO_START if kind == "scenario" else
-             scenario.STARTER_START if kind == "starter" else scenario.SANDBOX_START)
-    other = Room.objects.order_by("id").first()
+def create_room(kind, name=None, biz=None, invest=0, coins=None, charge=True, owner=None):
+    """Yangi startup. Balans umumiy: yangi startup yangi pul bermaydi — hamma xarajat bitta hamyondan.
+
+    kind: scenario (SmetaPro) | scratch (noldan, dasturchidek) | starter (tayyor shablon)
+          | bought (ishlab turgan biznesni sotib olish) | sandbox (eski: bo'sh doska + server)
+    """
+    start = {"scenario": scenario.SCENARIO_START, "starter": scenario.STARTER_START,
+             "scratch": scenario.SCRATCH_START, "bought": scenario.BOUGHT_START}.get(kind, scenario.SANDBOX_START)
+    mode = start.get("mode") or ("starter" if kind == "starter" else None)
+    other = mine(owner).order_by("id").first()
     if coins is None:
         coins = other.coins if other else start["coins"]
-    Room.objects.update(active=False)
+    if mode == "bought" and charge:
+        price = scenario.BUY_PRICE
+        if coins < price:
+            raise GameError(f"Tayyor biznes ${price} turadi, balansda ${coins:,.0f}. "
+                            "Noldan yoki tayyor shablondan boshlang — ular bepul.")
+        coins -= price
+    mine(owner).update(active=False)
     room = Room.objects.create(
-        name=(name or start["name"]).strip()[:80] or start["name"], kind=start["kind"], active=True,
+        owner_id=getattr(owner, "pk", owner), name=(name or start["name"]).strip()[:80] or start["name"], kind=start["kind"], active=True,
         users=start["users"], coins=coins, power_limit_w=start["power_limit_w"],
         seed=random.randint(1, 10_000), code=catalog.default_code(), env=catalog.new_env(),
         flags={"version": LAYOUT_VERSION, "max_users": start["users"], "launch": {},
                "last_tick": timezone.now().isoformat(), "hour": 8,
-               "business": "saas" if kind == "scenario" else (biz if biz in business.BUSINESSES else "shop")},
+               "business": "saas" if kind == "scenario" else (biz if biz in business.BUSINESSES else "shop"),
+               **({"mode": mode} if mode else {}), **({"dev": 0} if mode == "scratch" else {})},
         schema=project.default_schema(start["kind"]),
     )
     refs = {}
@@ -123,14 +140,29 @@ def create_room(kind, name=None, biz=None, invest=0, coins=None):
     la = dict(start["launch"])
     if "dns" in la:
         la["dns"] = refs[la["dns"]].id
+    if mode == "bought":
+        slug = re.sub(r"[^a-z0-9]+", "", room.name.lower())[:30] or "biznes"
+        la["domain"] = f"{slug}.uz"
+        la["dns_ip"] = refs["vps1"].ip
+        la["repo"] = f"{gh_user(room)}/{slug}"
+        room.flags = {**room.flags, "users_f": float(start["users"])}
     room.flags = {**room.flags, "launch": la}
     if la.get("deployed") and room.schema["migrations"]:
         room.schema["applied"] = room.schema["migrations"][-1]["name"]
-    room.save(update_fields=["flags", "schema"])
+    if mode == "bought":
+        room.code = {**room.code, "env_gitignored": True, "debug": False}
+    room.save(update_fields=["flags", "schema", "code"])
 
     # Git tarixining boshi: loyiha yaratildi. Senariyda .env ham "adashib" kommit qilingan —
     # Git darsi uchun: keyin o'chirilsa ham tarixda qoladi.
+    # "Noldan" startupda kod hali yo'q — birinchi kommit GitHub qadamida (git commit) yoziladi.
+    if mode == "scratch":
+        return room
     _commit(room, "loyiha yaratildi", "config/settings.py", [], file_lines(room, "config/settings.py"))
+    if mode == "bought":
+        for path in ("app/views.py", "templates/index.html", "deploy/nginx.conf"):
+            _commit(room, f"{path} qo'shildi", path, [], file_lines(room, path))
+        _commit(room, f"deploy: {la['domain']} ishga tushdi (HTTPS)", "deploy/deploy.sh", [], [])
     if room.kind == "scenario":
         _commit(room, "env qo'shildi", ".env", [], file_lines(room, ".env"))
         for mig in room.schema["migrations"]:
@@ -138,16 +170,16 @@ def create_room(kind, name=None, biz=None, invest=0, coins=None):
     return room
 
 
-def list_rooms():
+def list_rooms(owner=None):
     return [{"id": r.id, "name": r.name, "kind": r.kind, "day": r.day, "users": r.users,
-             "active": r.active} for r in Room.objects.all()]
+             "active": r.active} for r in mine(owner)]
 
 
-def switch_room(room_id):
-    room = Room.objects.filter(pk=room_id).first()
+def switch_room(room_id, owner=None):
+    room = mine(owner).filter(pk=room_id).first()      # begona startupni ochib bo'lmaydi
     if not room:
-        raise GameError("Bunday xona yo'q.")
-    Room.objects.update(active=False)
+        raise GameError("Bunday startup yo'q.")
+    mine(owner).update(active=False)
     room.active = True
     room.save(update_fields=["active"])
     sync(room)
@@ -157,21 +189,25 @@ def switch_room(room_id):
 def rename_room(room, name):
     name = (name or "").strip()[:80]
     if not name:
-        raise GameError("Xona nomi bo'sh bo'lmasin.")
+        raise GameError("Startup nomi bo'sh bo'lmasin.")
     room.name = name
     room.save(update_fields=["name"])
     return room
 
 
 def delete_room(room):
+    owner = room.owner_id
     room.delete()
-    return get_room()
+    return get_room(owner)
 
 
 def reset_room(room):
-    kind, name, biz, coins = room.kind, room.name, business_of(room), room.coins
+    mode = (room.flags or {}).get("mode")
+    kind = room.kind if room.kind == "scenario" else (mode or room.kind)
+    name, biz, coins = room.name, business_of(room), room.coins
     room.delete()
-    return create_room(kind, name, biz, coins=coins)      # balans umumiy — qayta boshlash pul bermaydi
+    # balans umumiy — qayta boshlash pul bermaydi (sotib olingan biznes uchun qayta to'lanmaydi ham)
+    return create_room(kind, name, biz, coins=coins, charge=False, owner=room.owner_id)
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +218,14 @@ def _next_name(room, kind):
             "worker": "worker", "nginx": "nginx", "lb": "lb", "redis": "redis"}.get(kind, kind)
     n = room.blocks.filter(kind=kind).count() + 1
     return f"{base}-{n}"
+
+
+def root_password(room, server):
+    """Hosting bergan root paroli (o'yinda — server raqami va startupdan hosil qilinadi, bazada saqlanmaydi)."""
+    h = hashlib.sha256(f"vallum:{room.seed}:{server.id}:{server.ip}".encode()).hexdigest()
+    alpha = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    chars = [alpha[int(h[i:i + 2], 16) % len(alpha)] for i in range(0, 24, 2)]
+    return "".join(chars[:4]) + "-" + "".join(chars[4:8]) + "-" + "".join(chars[8:12])
 
 
 def _ip_for(room, server):
@@ -262,7 +306,7 @@ def code_context(room):
         "domain": la.get("domain") or "localhost",
         "scheme": "https" if la.get("ssl") else "http",
         "ssl": bool(la.get("ssl")),
-        "repo": la.get("repo") or f"men/{slug}",
+        "repo": la.get("repo") or f"{gh_user(room)}/{slug}",
         "server_ip": srv.ip if srv else "0.0.0.0",
         "has_worker": "worker" in kinds, "has_redis": "redis" in kinds, "has_bot": "tgbot" in kinds,
         "has_auth": "auth" in kinds,
@@ -274,7 +318,7 @@ def code_context(room):
         "bot_mode": bot.config.get("mode", "polling") if bot else "polling",
         "bot_webhook": bool(bot and bot.config.get("mode") == "webhook"),
         "models_code": project.models_code(models),
-        "admin_code": project.admin_code(models, (room.schema or {}).get("admin")),
+        "admin_code": project.admin_code(models, (room.schema or {}).get("admin"), (room.schema or {}).get("admin_site")),
     }
 
 
@@ -327,18 +371,31 @@ def _fits(room, kind, config, host, exclude_id=None):
 # Bloklar
 # ---------------------------------------------------------------------------
 @transaction.atomic
-def add_block(room, kind, x, y, host_id=None):
+def add_block(room, kind, x, y, host_id=None, tier=None):
     spec = catalog.BLOCKS.get(kind)
     if not spec or spec.get("fixed"):
         raise GameError("Bu blokni qo'shib bo'lmaydi.")
     if room.blocks.filter(kind=kind).count() >= spec["max_count"]:
         raise GameError(f"{spec['title']} — ko'pi bilan {spec['max_count']} ta.")
+    # Avval server: doska — bu serverlaringiz. Qolgan bloklar (Nginx, Sayt, baza, tashqi xizmatlar
+    # bilan ishlovchi kod) shu server ichida ishlaydigan dasturlar — server yo'q bo'lsa, qo'yadigan joy yo'q.
+    if kind != "server" and not room.blocks.filter(kind="server").exists():
+        raise GameError("Avval Server qo'shing. Doska — bu sizning serverlaringiz: Nginx, Sayt, baza va boshqalar "
+                        "server ichida ishlaydigan dasturlar. Server bo'lmasa, ularni o'rnatadigan joy yo'q.",
+                        "Server = internetga ulangan, 24 soat yoqiq turadigan kompyuter (ijaraga olinadi).")
     cost = spec.get("cost", 0)
+    tier = tier if tier in catalog.SERVER_TIERS else "orta"
     if kind == "server":
-        cost = catalog.SERVER_TIERS["orta"]["rent"]
+        # Bulutdagidek: ijara soatbay yechiladi (oldindan to'lov yo'q). Lekin kamida 1 kunlik pul bo'lsin.
+        need = catalog.SERVER_TIERS[tier]["rent"]
+        if room.coins < need:
+            raise GameError(f"Pul yetmaydi: bu server kuniga ${need}, sizda ${room.coins:.0f}.",
+                            "Ijara har soatda balansdan yechiladi — kamida 1 kunlik pul bo'lishi kerak.")
     if room.coins < cost:
         raise GameError(f"Pul yetmaydi: ${cost} kerak, sizda {room.coins:.0f}.")
     config = catalog.default_config(kind)
+    if kind == "server":
+        config["tier"] = tier
 
     host = None
     if rules.needs_host(kind, spec):
@@ -583,6 +640,7 @@ def advance_hours(room, n, neglect_after=None):
     kassa = float(flags.get("kassa", 0))
     floor = min(room.users, 10)
     events, tot_rev, tot_cost, suspended_at = [], 0.0, 0.0, None
+    rent = 0.0
     lay = layout_of(room)
     m = None
     for i in range(n):
@@ -596,6 +654,8 @@ def advance_hours(room, n, neglect_after=None):
         suspended = bool(room.flags.get("suspended"))
         m = engine.evaluate(lay, round(users_f), traffic_factor=engine.traffic_factor_for(room.seed, room.day))
         h = engine.hour_step(lay, users_f, m, suspended)
+        if not suspended:
+            rent += engine.daily_cost(lay)[0] / engine.HOURS
         users_f = h["users"]
         # mijoz to'lovlari To'lov shlyuzi kassasida yig'iladi — egasi yechib olmaguncha balansga tushmaydi
         kassa += h["sales"]
@@ -645,6 +705,8 @@ def advance_hours(room, n, neglect_after=None):
     room.neg_streak = 0
     room.flags = {**room.flags, "users_f": users_f, "hour": hour, "acc": acc, "kassa": round(kassa, 2)}
     room.save()
+    if rent > 0.001:
+        pay(room, "rent", rent, f"Kun {room.day}")
     return {"hours": n, "from": start, "to": {"users": room.users, "coins": room.coins, "day": room.day, "hour": hour},
             "revenue": round(tot_rev, 1), "cost": round(tot_cost, 1), "net": round(tot_rev - tot_cost, 1),
             "events": events, "suspended_at": suspended_at,
@@ -770,7 +832,7 @@ def buy_growth(room, kind, item):
 
 def growth_state(room):
     f = room.flags or {}
-    rooms = list(Room.objects.order_by("id").values("id", "name", "coins", "users", "flags"))
+    rooms = list(mine(room.owner_id).order_by("id").values("id", "name", "coins", "users", "flags"))
     return {
         "campaigns": f.get("campaigns", []), "upgrades": f.get("upgrades", []), "effects": f.get("effects", []),
         "event_log": f.get("event_log", []), "mods": growth.modifiers(f),
@@ -799,6 +861,199 @@ def tick(room, days=1):
 
 
 # ---------------------------------------------------------------------------
+# 💻 Lokal: noldan loyiha yaratish (dasturchidek, terminalda)
+# ---------------------------------------------------------------------------
+def dev_state(room):
+    f = room.flags or {}
+    n = devsetup.progress(f)
+    return {"scratch": f.get("mode") == "scratch", "done": n, "total": len(devsetup.TASKS),
+            "finished": n >= len(devsetup.TASKS), "prompt": devsetup.prompt_after(n)}
+
+
+@transaction.atomic
+def dev_step(room, task_id):
+    """Dars vazifasi bajarildi. Tartib bilan: keyingi vazifa bo'lishi shart."""
+    f = room.flags or {}
+    if f.get("mode") != "scratch":
+        raise GameError("Bu startupda loyiha allaqachon yaratilgan.")
+    n = devsetup.progress(f)
+    if n >= len(devsetup.TASKS):
+        return "Loyiha tayyor"
+    task = devsetup.TASKS[n]
+    if task_id != task["id"]:
+        raise GameError(f"Avval: {task['ask'][0].lower() + task['ask'][1:]}.")
+    room.flags = {**f, "dev": n + 1, "dev_v": devsetup.DEV_VERSION}
+    if task_id == "editor":            # VS Code da: .env yaratildi va .gitignore ga yozildi
+        room.code = {**room.code, "env_gitignored": True}
+    if task_id == "makemigrations":    # dars modeli o'yinchi sxemasiga yoziladi (Git hali yo'q — kommitsiz)
+        schema = room.schema or {"models": [], "migrations": []}
+        if not schema.get("models"):
+            clean = project.clean_models([devsetup.LESSON_MODEL])
+            schema, _mig = project.apply_models(schema, clean)
+            room.schema = schema
+    room.save(update_fields=["flags", "code", "schema"])
+    if task_id == "gitcommit" and not room.commits.exists():
+        _commit(room, "birinchi versiya", "config/settings.py", [], file_lines(room, "config/settings.py"))
+    if task_id == "push":              # 🚀 GitHub qadami ham bajarildi
+        la = dict(room.flags.get("launch", {}))
+        repo = f"{gh_user(room)}/{_values(room)['project']}"
+        la.update(github=True, repo=repo)
+        room.code = {**room.code, "repo_public": False}
+        room.flags = {**room.flags, "launch": la}
+        room.save(update_fields=["flags", "code"])
+        _commit(room, f"git push -u origin main → github.com/{repo} (yopiq repo)", "", [], [])
+        return "Kod GitHub'ga yuklandi! Endi doskada server oling va 🚀 bilan internetga chiqaring"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Profil: GitHub username (hamma startuplar uchun bitta — o'yinchining o'zi)
+# ---------------------------------------------------------------------------
+def gh_user(room):
+    f = room.flags or {}
+    if f.get("gh_user"):
+        return f["gh_user"]
+    other = mine(room.owner_id).exclude(pk=room.pk).filter(flags__has_key="gh_user").first() if room.pk else None
+    return (other.flags or {}).get("gh_user") if other else "men"
+
+
+@transaction.atomic
+def set_profile(room, user):
+    user = str(user or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", user):
+        raise GameError("Username: lotin harf, raqam va '-' (masalan iskandar-dev), 1–39 belgi.",
+                        "GitHub'dagi nom shunday qoidaga bo'ysunadi — bo'sh joy va o'zbekcha harflar bo'lmaydi.")
+    for r in mine(room.owner_id):
+        r.flags = {**(r.flags or {}), "gh_user": user}
+        la = dict(r.flags.get("launch", {}))
+        if la.get("repo") and la["repo"].startswith("men/"):      # eski "men/..." repolar yangi nomga
+            la["repo"] = f"{user}/{la['repo'].split('/', 1)[1]}"
+            r.flags["launch"] = la
+        r.save(update_fields=["flags"])
+    return f"Salom, {user}!"
+
+
+# ---------------------------------------------------------------------------
+# 🌐 Brauzer: domen do'koni (Domenchi.uz) va hosting (Bulutxon.uz)
+# ---------------------------------------------------------------------------
+TAKEN_DOMAINS = {"google", "uzum", "payme", "olx", "kun", "click", "yandex", "telegram", "youtube", "facebook",
+                 "instagram", "amazon", "github", "domenchi", "bulutxon", "vallum", "gov", "mail", "daryo", "uzbekistan"}
+
+
+def domain_check(name):
+    """Domen bo'shmi: (to'g'ri nom?, bo'shmi?, sabab)."""
+    name = str(name or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}\.(%s)" % "|".join(launch.DOMAIN_ZONES), name):
+        return False, False, "Nom noto'g'ri: lotin harf, raqam, '-' va zona (.uz, .com ...)"
+    if name.split(".")[0] in TAKEN_DOMAINS:
+        return True, False, "Band — bu domen boshqa egaga tegishli"
+    return True, True, ""
+
+
+@transaction.atomic
+def buy_domain(room, name):
+    name = str(name or "").strip().lower()
+    ok, free, why = domain_check(name)
+    if not ok or not free:
+        raise GameError(f"{name}: {why}.")
+    la = dict((room.flags or {}).get("launch", {}))
+    if la.get("domain") == name:
+        raise GameError(f"{name} allaqachon sizniki.")
+    if room.coins < launch.DOMAIN_COST:
+        raise GameError(f"Pul yetmaydi: domen ${launch.DOMAIN_COST} / yil.")
+    room.coins -= launch.DOMAIN_COST
+    pay(room, "domain", launch.DOMAIN_COST, f"{name} · 1 yil")
+    la.update(domain=name, dns=None, dns_ip=None, ssl=False)    # yangi domen — hali hech qayerga qaramaydi
+    room.flags = {**room.flags, "launch": la}
+    room.save()
+    _commit(room, f"domen sotib olindi: {name} (Domenchi.uz, 1 yil)", "DNS", [], [f"; {name} — A yozuvi hali yo'q"])
+    return f"{name} sizniki! Endi DNS da A yozuvini server IP siga yo'naltiring"
+
+
+@transaction.atomic
+def set_dns(room, ip):
+    la = dict((room.flags or {}).get("launch", {}))
+    if not la.get("domain"):
+        raise GameError("Avval domen sotib oling.")
+    ip = str(ip or "").strip()
+    if not re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", ip) or any(int(x) > 255 for x in ip.split(".")):
+        raise GameError("IP manzil noto'g'ri. Ko'rinishi: 4 ta son nuqta bilan, masalan 203.0.113.10")
+    srv = room.blocks.filter(kind="server", ip=ip).first()
+    if not srv:
+        raise GameError(f"{ip} — sizning serveringiz emas. Bulutxon.uz → 'Serverlarim' dan IP ni nusxalang.",
+                        "Domen begona IP ga qarasa, mijozlar sizning saytingizni emas, boshqa joyni (yoki hech narsani) ko'radi.")
+    old_ip = la.get("dns_ip")
+    la.update(dns=srv.id, dns_ip=srv.ip)
+    room.flags = {**room.flags, "launch": la}
+    room.save(update_fields=["flags"])
+    _commit(room, f"DNS: {la['domain']} → {srv.ip} ({srv.name})", "DNS",
+            [f"A  @  {old_ip}"] if old_ip else [], [f"A  @  {srv.ip}", f"A  www  {srv.ip}"])
+    msg = f"A yozuvi saqlandi: {la['domain']} → {srv.ip}"
+    if not srv.config.get("public", True):
+        msg += " · diqqat: server ichki IP da!"
+    return msg
+
+
+@transaction.atomic
+def cancel_server(room, pk):
+    """Bulutxon.uz → serverni o'chirish (ijara to'xtaydi). Real hostingdagidek: server ichidagi
+    hamma narsa (dasturlar, fayllar) ham o'chadi. Domen shu serverga qaragan bo'lsa — A yozuvi bo'shaydi."""
+    srv = _block(room, pk)
+    if srv.kind != "server":
+        raise GameError("Bu server emas.")
+    apps = list(srv.services.all())
+    for b in apps:
+        b.delete()
+    _commit(room, f"{srv.name} ({srv.ip}) Bulutxon'da o'chirildi" + (f" — ichidagi {len(apps)} ta dastur ham" if apps else ""),
+            catalog.BLOCK_CODE.get("server", {}).get("file", "server"), catalog.render_code("server", srv.config), [])
+    ip = srv.ip
+    srv.delete()
+    la = dict((room.flags or {}).get("launch", {}))
+    changed = False
+    if la.get("dns_ip") == ip or la.get("dns") == pk:
+        la.update(dns=None, dns_ip=None, ssl=False)
+        changed = True
+    if la.get("deployed") and not room.blocks.filter(kind="app").exclude(host=None).exists():
+        la.update(deployed=False, ssl=False)       # kod o'sha server bilan birga o'chdi — qayta deploy kerak
+        changed = True
+    if changed:
+        room.flags = {**room.flags, "launch": la}
+        room.save(update_fields=["flags"])
+    msg = f"Server {ip} o'chirildi — ijara endi yechilmaydi"
+    return msg + (f", ichidagi {len(apps)} ta dastur ham o'chdi" if apps else "")
+
+
+@transaction.atomic
+def drop_domain(room):
+    """Domenchi.uz → domendan voz kechish. Pul qaytarilmaydi (yillik to'lov)."""
+    la = dict((room.flags or {}).get("launch", {}))
+    name = la.get("domain")
+    if not name:
+        raise GameError("Sizda domen yo'q.")
+    la.update(domain=None, dns=None, dns_ip=None, ssl=False)
+    room.flags = {**room.flags, "launch": la}
+    room.save(update_fields=["flags"])
+    _commit(room, f"domendan voz kechildi: {name}", "DNS", [f"A  @  {la.get('dns_ip') or '—'}"], [])
+    return f"{name} o'chirildi — endi u boshqalar uchun bo'sh. Saytingiz shu nom bilan ochilmaydi"
+
+
+def rent_server(room, tier):
+    """Bulutxon.uz dan VPS ijarasi — doskada yangi Server bloki paydo bo'ladi."""
+    if tier not in catalog.SERVER_TIERS:
+        raise GameError("Bunday tarif yo'q.")
+    n = room.blocks.filter(kind="server").count()
+    b = add_block(room, "server", 240 + (n % 3) * 260, 90 + (n // 3) * 220, tier=tier)
+    t = catalog.SERVER_TIERS[tier]
+    return b, f"{t['title']} tayyor: IP {b.ip} · ${t['rent']}/kun. Doskada ham paydo bo'ldi"
+
+
+def _need_code(room):
+    if not devsetup.is_done(room.flags):
+        raise GameError("Avval kompyuteringizda loyiha yarating: chapdagi 'Dars' bo'limi (0 dan loyiha).",
+                        "Kod yo'q — GitHub'ga ham, serverga ham yuklaydigan narsa yo'q.")
+
+
+# ---------------------------------------------------------------------------
 # 🚀 Ishga tushirish: domen, GitHub, deploy, SSL
 # ---------------------------------------------------------------------------
 def launch_state(room, lay=None):
@@ -806,7 +1061,7 @@ def launch_state(room, lay=None):
     has_server = room.blocks.filter(kind="server").exists()
     dns = room.blocks.filter(pk=la.get("dns")).first() if la.get("dns") else None
     return {
-        "done": {"server": has_server, "domain": bool(la.get("domain")), "github": bool(la.get("github")),
+        "done": {"server": has_server, "domain": bool(la.get("domain") and la.get("dns")), "github": bool(la.get("github")),
                  "deploy": bool(la.get("deployed")), "ssl": bool(la.get("ssl"))},
         "domain": la.get("domain"), "dns": la.get("dns"), "dns_ip": dns.ip if dns else None,
         "repo": la.get("repo"), "pending_migration": bool(lay and lay.launch.get("pending_migration")),
@@ -841,17 +1096,23 @@ def launch_step(room, step, data):
         if not srv.config.get("public", True):
             msg += " · diqqat: server ichki IP da!"
     elif step == "github":
+        _need_code(room)
         repo = str(data.get("repo", "")).strip()
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,30}/[A-Za-z0-9_.-]{1,40}", repo):
             raise GameError("Repo nomi: foydalanuvchi/loyiha, masalan men/mydokon.")
         public = bool(data.get("public"))
         la.update(github=True, repo=repo)
         room.code = {**room.code, "repo_public": public}
+        if not room.commits.exists():        # "noldan": birinchi kommit shu yerda (git commit)
+            _commit(room, "birinchi versiya", "config/settings.py", [], file_lines(room, "config/settings.py"))
+            if not room.code.get("env_gitignored"):
+                _commit(room, ".env qo'shildi", ".env", [], file_lines(room, ".env"))
         _commit(room, f"git push origin main → github.com/{repo} ({'ochiq' if public else 'yopiq'} repo)", "", [], [])
         msg = "Kod GitHub'ga yuklandi"
         if public and not room.code.get("env_gitignored"):
             msg += " · diqqat: .env ham ochiq repoga tushdi!"
     elif step == "deploy":
+        _need_code(room)
         if not la.get("github"):
             raise GameError("Avval kodni GitHub'ga yuklang — server kodni repodan tortib oladi.",
                             "Kodni qo'lda nusxalasangiz — serverda qaysi versiya turgani noma'lum bo'lib qoladi.")
@@ -915,9 +1176,9 @@ def save_admin(room, raw):
     models = schema.get("models", [])
     if not models:
         raise GameError("Avval model yarating (Kod → app/models.py) — adminda ko'rsatadigan jadval yo'q.")
-    old = project.admin_code(models, schema.get("admin"))
+    old = project.admin_code(models, schema.get("admin"), schema.get("admin_site"))
     schema["admin"] = project.clean_admin(models, raw)
-    new = project.admin_code(models, schema["admin"])
+    new = project.admin_code(models, schema["admin"], schema.get("admin_site"))
     if new == old:
         return "O'zgarish yo'q"
     room.schema = schema
@@ -956,6 +1217,7 @@ def snapshot(room):
         blocks.append({
             "id": b.id, "kind": b.kind, "name": b.name, "x": b.x, "y": b.y, "config": b.config,
             "ip": b.ip, "host": b.host_id,
+            **({"login": "root", "password": root_password(room, b)} if b.kind == "server" else {}),
             "host_name": f"{host.name} · {host.ip}" if host else None,
             "code": catalog.render_code(b.kind, b.config),
             "services": [s.id for s in names.values() if s.host_id == b.id],
@@ -964,7 +1226,7 @@ def snapshot(room):
         "room": {"id": room.id, "name": room.name, "kind": room.kind, "day": room.day,
                  "users": room.users, "coins": room.coins, "power_limit_w": room.power_limit_w,
                  "neg_streak": room.neg_streak},
-        "rooms": list_rooms(),
+        "rooms": list_rooms(room.owner_id),
         "blocks": blocks,
         "connections": [{"id": c.id, "source": c.source_id, "target": c.target_id}
                         for c in room.connections.all()],
@@ -978,6 +1240,7 @@ def snapshot(room):
         "neglected": bool((room.flags or {}).get("neglected")),
         "kassa": round(float((room.flags or {}).get("kassa", 0)), 2),
         "admin": project.clean_admin((room.schema or {}).get("models", []), (room.schema or {}).get("admin")),
+        "djadmin": dj_admin_state(room),
         "suspended_at": (room.flags or {}).get("suspended_at"),
         "away": getattr(room, "_away", None),
         "sync_events": getattr(room, "_events", []),
@@ -996,12 +1259,145 @@ def snapshot(room):
         "env": room.env,
         "ctx": code_context(room),
         "schema": room.schema,
-        "files": [f["path"] for f in project.visible_files(_values(room), room.schema or {})],
+        "files": visible_paths(room),
+        "dev": dev_state(room),
+        "wallet": wallet_state(room),
+        "me": {"email": room.owner.email if room.owner_id else "", "staff": bool(room.owner_id and room.owner.is_staff)},
+        "profile": {"gh_user": gh_user(room), "set": bool((room.flags or {}).get("gh_user")) or mine(room.owner_id).filter(flags__has_key="gh_user").exists()},
+        "mode": (room.flags or {}).get("mode"),
         "migrations": {f"app/migrations/{m['name']}.py": m["lines"] for m in (room.schema or {}).get("migrations", [])},
         "launch": launch_state(room, lay),
     }
 
 
+def visible_paths(room):
+    """Kod bo'limidagi fayllar. "Noldan" startupda — faqat lokal terminalda yaratilganlari."""
+    paths = [f["path"] for f in project.visible_files(_values(room), room.schema or {})]
+    n = devsetup.progress(room.flags)
+    if n >= len(devsetup.TASKS):
+        return paths
+    prefixes = devsetup.revealed(n)
+    return [p for p in paths if devsetup.path_visible(p, prefixes)]
+
+
 def static_payload():
     return {"catalog": catalog.public_catalog(), "guide": guide.CHAPTERS,
-            "scenario": {"title": scenario.TITLE, "intro": scenario.INTRO}}
+            "scenario": {"title": scenario.TITLE, "intro": scenario.INTRO},
+            "modes": scenario.MODES, "buy_price": scenario.BUY_PRICE, "dev_tasks": devsetup.TASKS,
+            "taken_domains": sorted(TAKEN_DOMAINS)}
+
+
+# ---------------------------------------------------------------------------
+# G'azna: o'yinchilar domen va server uchun to'lagan pul
+# ---------------------------------------------------------------------------
+def pay(room, kind, amount, note=""):
+    """Domen / server pulini g'aznaga yozadi. Soatlik ijara bitta kunlik qatorga jamlanadi."""
+    amount = round(float(amount), 4)
+    if amount <= 0:
+        return
+    if kind == "rent":
+        row = Ledger.objects.filter(room=room, kind="rent", note=note).first()
+        if row:
+            Ledger.objects.filter(pk=row.pk).update(amount=round(row.amount + amount, 4))
+            return
+    Ledger.objects.create(user_id=room.owner_id, room=room, kind=kind, amount=amount, note=note[:120])
+
+
+# ---------------------------------------------------------------------------
+# O'yinchi saytidagi Django admin: superuser, /admin/login/, panel nomi
+# ---------------------------------------------------------------------------
+DJ_USERNAME = r"[\w.@+-]{1,150}"
+
+
+def dj_admin_state(room):
+    su = (room.flags or {}).get("dj_super") or {}
+    return {"header": ((room.schema or {}).get("admin_site") or {}).get("header") or project.ADMIN_HEADER,
+            "super": su.get("username"), "logged": bool((room.flags or {}).get("dj_login")) and bool(su)}
+
+
+@transaction.atomic
+def dj_admin(room, d):
+    """createsuperuser → login → admin panel nomini o'zgartirish. Parol faqat xesh ko'rinishida saqlanadi."""
+    from django.contrib.auth.hashers import check_password, make_password
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError
+    from .accounts import UZ_PASSWORD
+
+    act = d.get("action")
+    flags = dict(room.flags or {})
+    if act == "superuser":
+        user = str(d.get("username") or "").strip()
+        pw, pw2 = str(d.get("password") or ""), str(d.get("password2") or "")
+        if not re.fullmatch(DJ_USERNAME, user):
+            raise GameError("Username: harf, raqam va @ . + - _ belgilar (bo'sh joysiz).")
+        if pw != pw2:
+            raise GameError("Error: Your passwords didn't match.", "Parollar bir xil emas — qayta kiriting.")
+        try:
+            validate_password(pw)
+        except ValidationError as e:
+            raise GameError(" ".join(e.messages), " ".join(UZ_PASSWORD.get(x.code, "") for x in e.error_list))
+        flags["dj_super"] = {"username": user, "password": make_password(pw)}
+        flags.pop("dj_login", None)
+        room.flags = flags
+        room.save(update_fields=["flags"])
+        return "Superuser created successfully. · Endi /admin/ sahifasidan shu username va parol bilan kiring"
+    if act == "login":
+        su = flags.get("dj_super")
+        if not su:
+            raise GameError("Hali admin foydalanuvchi yo'q.", "Serverda avval: python manage.py createsuperuser")
+        if str(d.get("username") or "") != su["username"] or not check_password(str(d.get("password") or ""), su["password"]):
+            raise GameError("Please enter the correct username and password for a staff account. "
+                            "Note that both fields may be case-sensitive.", "Username yoki parol noto'g'ri.")
+        flags["dj_login"] = True
+        room.flags = flags
+        room.save(update_fields=["flags"])
+        return f"Xush kelibsiz, {su['username']}!"
+    if act == "logout":
+        flags.pop("dj_login", None)
+        room.flags = flags
+        room.save(update_fields=["flags"])
+        return "Logged out"
+    if act == "header":
+        if not flags.get("dj_login"):
+            raise GameError("Avval admin panelga kiring.")
+        header = re.sub(r"\s+", " ", str(d.get("header") or "")).strip()[:60] or project.ADMIN_HEADER
+        schema = dict(room.schema or {})
+        models = schema.get("models", [])
+        old = project.admin_code(models, schema.get("admin"), schema.get("admin_site"))
+        schema["admin_site"] = {"header": header}
+        new = project.admin_code(models, schema.get("admin"), schema["admin_site"])
+        if new == old:
+            return "O'zgarish yo'q"
+        room.schema = schema
+        room.save(update_fields=["schema"])
+        _commit(room, f"app/admin.py: panel nomi — {header}", "app/admin.py", old, new)
+        return f"Panel nomi: {header} · app/admin.py yangilandi"
+    raise GameError("Noma'lum amal.")
+
+
+# ---------------------------------------------------------------------------
+# Hamyon: o'yinchining HAMMA startuplari bitta hamyondan to'laydi
+# ---------------------------------------------------------------------------
+def sync_owner(room):
+    """Boshqa startuplarni ham hozirgi vaqtgacha hisoblaydi — aks holda ularning ijarasi
+    o'sha startup ochilgandagina birdan yechilib, balans "sakrab" tushardi.
+    Qaytaradi: yangilangan joriy startup."""
+    for pk in mine(room.owner_id).exclude(pk=room.pk).values_list("pk", flat=True):
+        other = Room.objects.filter(pk=pk).first()      # har biri yangidan o'qiladi (balans yangi)
+        if other:
+            sync(other)
+    room.refresh_from_db()
+    sync(room)
+    return room
+
+
+def wallet_state(room):
+    """Balans yonidagi ro'yxat: qaysi startup kuniga qancha xarajat qilyapti."""
+    rows = []
+    for r in mine(room.owner_id):
+        lay = layout_of(r)
+        stopped = bool((r.flags or {}).get("suspended"))
+        rows.append({"id": r.id, "name": r.name, "servers": r.blocks.filter(kind="server").count(),
+                     "cost": 0 if stopped else engine.daily_cost(lay)[0], "stopped": stopped,
+                     "kassa": round(float((r.flags or {}).get("kassa", 0)), 1), "current": r.id == room.id})
+    return {"rooms": rows, "cost": round(sum(x["cost"] for x in rows), 1)}

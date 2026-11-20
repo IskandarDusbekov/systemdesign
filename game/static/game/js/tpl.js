@@ -89,7 +89,7 @@ export function renderTpl(lines, opts) {
         html = fieldHtml ? fieldHtml(field) : esc(plain);
       } else if (ctx) {
         plain = String(values[ctx] ?? "");
-        html = `<span class="ctx" title="xonadan: ${ctx}">${esc(plain)}</span>`;
+        html = `<span class="ctx" title="startupdan: ${ctx}">${esc(plain)}</span>`;
       } else if (envKey) {
         const val = env[envKey] ?? "";
         plain = mask ? val.slice(0, 6) + "••••••" : val;

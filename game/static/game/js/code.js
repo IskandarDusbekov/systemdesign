@@ -7,13 +7,13 @@
 //     xavfsizlik holati va API manzillari.
 // =========================================================================
 import { esc, renderTpl, fmtField } from "./tpl.js";
+import { ico, fileIco } from "./ui-icons.js";
 
 const $ = (id) => document.getElementById(id);
 let draft = null;      // saqlanmagan kod sozlamalari
 let mdraft = null;     // saqlanmagan modellar
 const closed = new Set();   // yopilgan papkalar
 
-const ICON = { python: "🐍", env: "🔑", md: "📘", txt: "📄", nginx: "⚙", ini: "⚙", bash: "▸" };
 
 function fileDef(state, data, path) {
   const f = data.catalog.project_files.find((x) => x.path === path);
@@ -55,7 +55,7 @@ function treeHtml(node, depth, state, data, current) {
   Object.keys(node.dirs).sort().forEach((d) => {
     const sub = node.dirs[d];
     const isClosed = closed.has(sub.key);
-    html += `<div class="tr-dir" data-dir="${esc(sub.key)}" style="padding-left:${depth * 14 + 6}px">${isClosed ? "▸" : "▾"} 📁 ${esc(d)}</div>`;
+    html += `<div class="tr-dir" data-dir="${esc(sub.key)}" style="padding-left:${depth * 14 + 6}px">${ico(isClosed ? "chevronRight" : "chevronDown", 12, "tr-chev")} ${ico(isClosed ? "folder" : "folderOpen", 14, "fi fi-dir")} ${esc(d)}</div>`;
     if (!isClosed) html += treeHtml(sub, depth + 1, state, data, current);
   });
   node.files.sort((a, b) => a.localeCompare(b)).forEach((p) => {
@@ -63,7 +63,7 @@ function treeHtml(node, depth, state, data, current) {
     const name = p.split("/").pop();
     const editable = f && !f.generated && /\{\w+\}/.test(f.lines.join("\n"));
     html += `<div class="tr-file ${p === current ? "active" : ""}" data-file="${esc(p)}" style="padding-left:${depth * 14 + 20}px">
-      ${ICON[f?.lang] || "📄"} ${esc(name)}${editable ? `<i class="tr-dot" title="o'zgartiriladigan joy bor"></i>` : ""}</div>`;
+      ${fileIco(p, 14)} ${esc(name)}${editable ? `<i class="tr-dot" title="o'zgartiriladigan joy bor"></i>` : ""}</div>`;
   });
   return html;
 }
@@ -78,7 +78,18 @@ export function renderCode(state, data, ui, actions) {
   }
   const v = values(state);
   const dirty = JSON.stringify(draft.values) !== draft.saved;
-  if (!state.files.includes(ui.file)) ui.file = "config/settings.py";
+  // "Noldan" startup: loyiha hali yaratilmagan — fayllar terminal buyruqlari bilan paydo bo'ladi
+  if (!state.files.length) {
+    $("page-code").innerHTML = `<section class="card code-empty">
+      ${ico("folderOpen", 40)}
+      <h2>Loyiha hali yaratilmagan</h2>
+      <p class="muted">Kod fayllari o'z-o'zidan paydo bo'lmaydi — ularni terminal yaratadi:
+        <code>django-admin startproject</code> → manage.py va config/, <code>startapp</code> → app/, <code>mkdir</code> → templates, static, media.</p>
+      <button class="btn primary" id="codeLocal">${ico("terminal", 14)} 0-qadam: terminalni ochish</button></section>`;
+    $("codeLocal").onclick = () => actions.launchStep("local");
+    return;
+  }
+  if (!state.files.includes(ui.file)) ui.file = state.files.includes("config/settings.py") ? "config/settings.py" : state.files[0];
   const file = fileDef(state, data, ui.file);
   const rerender = () => renderCode(state, data, ui, actions);
 
@@ -112,7 +123,7 @@ export function renderCode(state, data, ui, actions) {
           <button class="mini" data-rotate="${key}">↻ rotate</button></span>`;
       }
     }
-    return `<div class="ln2 ${r.editable ? "ed" : ""} ${ui.line === i ? "hit" : ""}" ${ui.line === i ? 'id="hitLine"' : ""}><span class="gut">${i + 1}</span><span class="src">${html}</span></div>`;
+    return `<div class="ln2 ${r.editable ? "edl" : ""} ${ui.line === i ? "hit" : ""}" ${ui.line === i ? 'id="hitLine"' : ""}><span class="gut">${i + 1}</span><span class="src">${html}</span></div>`;
   }).join("");
   const slots = rows.filter((r) => r.editable).length;
 
@@ -123,8 +134,9 @@ export function renderCode(state, data, ui, actions) {
 
   $("page-code").innerHTML = `
     <aside class="card ide-tree">
-      <div class="ide-proj">📦 ${esc(state.ctx.project)} <span class="muted">· ${esc(state.ctx.repo)}</span></div>
-      <input class="ide-search" id="ideSearch" placeholder="🔍 Loyihadan qidirish (DEBUG, SECRET, ...)" value="${esc(ui.search || "")}">
+      <div class="ide-proj">${ico("package", 15)} ${esc(state.ctx.project)} <span class="muted">· ${esc(state.ctx.repo)}</span></div>
+      ${state.dev.scratch && !state.dev.finished ? `<button class="ide-local" id="ideLocal">${ico("terminal", 13)} Loyiha qurilmoqda: ${state.dev.done}/${state.dev.total} — terminalni ochish</button>` : ""}
+      <input class="ide-search" id="ideSearch" placeholder="Loyihadan qidirish (DEBUG, SECRET, ...)" value="${esc(ui.search || "")}">
       ${results ? `<div class="sr">${results}</div>` : ""}
       <div class="tree">${treeHtml(buildTree(state.files), 0, state, data, file.path)}</div>
     </aside>
@@ -150,6 +162,7 @@ export function renderCode(state, data, ui, actions) {
     else el.onchange = () => { draft.values[name] = f.type === "int" ? parseInt(el.value, 10) : el.value; rerender(); };
   });
   $("btnSaveCode").onclick = () => actions.saveCode({ ...draft.values });
+  if ($("ideLocal")) $("ideLocal").onclick = () => actions.launchStep("local");
   const search = $("ideSearch");
   search.oninput = () => { ui.search = search.value; ui.line = null; rerender(); const s = $("ideSearch"); s.focus(); s.setSelectionRange(s.value.length, s.value.length); };
   $("page-code").querySelectorAll("[data-file]").forEach((el) => el.onclick = () => { ui.line = null; actions.openFile(el.dataset.file); });

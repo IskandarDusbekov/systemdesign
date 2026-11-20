@@ -23,11 +23,20 @@ FILES = [
         "Repo:  github.com/[[repo]]",
         "Sayt:  [[scheme]]://[[domain]]",
         "",
-        "## Ishga tushirish (lokal)",
-        "    python -m venv .venv",
-        "    .venv/bin/pip install -r requirements.txt",
-        "    .venv/bin/python manage.py migrate",
-        "    .venv/bin/python manage.py runserver",
+        "## Kompyuterda ishga tushirish (Windows)",
+        "    py -m venv venv                  # virtual muhit",
+        "    venv\\Scripts\\activate           # uni yoqish",
+        "    pip install -r requirements.txt  # kutubxonalar",
+        "    python manage.py migrate         # baza jadvallari",
+        "    python manage.py runserver       # http://127.0.0.1:8000",
+        "",
+        "## Tuzilma",
+        "    config/     — sozlamalar (settings.py) va manzillar (urls.py)",
+        "    app/        — asosiy ilova: models, views, admin, migrations",
+        "    templates/  — HTML sahifalar",
+        "    static/     — CSS, JS, rasmlar (dizayn)",
+        "    media/      — foydalanuvchi yuklagan fayllar",
+        "    deploy/     — serverga chiqarish: nginx, gunicorn, deploy.sh",
     ]},
     {"path": "manage.py", "lang": "python", "lines": [
         "#!/usr/bin/env python",
@@ -60,7 +69,8 @@ FILES = [
     {"path": ".gitignore", "lang": "txt", "lines": [
         "__pycache__/",
         "*.pyc",
-        ".venv/",
+        "venv/",
+        "db.sqlite3",
         "media/",
         "staticfiles/",
         "# .env gitignore da: {env_gitignored}",
@@ -103,6 +113,13 @@ FILES = [
         "    <button>Kod yuborish</button>",
         "  </form>",
         "{% endblock %}",
+    ]},
+    {"path": "static/css/style.css", "lang": "css", "lines": [
+        "/* static/ — dizayn fayllari: CSS, JS, rasmlar. Hamma foydalanuvchiga bir xil. */",
+        "/* Serverda 'python manage.py collectstatic' ularni staticfiles/ ga yig'adi, Nginx beradi. */",
+        "body { font-family: system-ui, sans-serif; margin: 0; background: #fafafa; }",
+        "header { display: flex; justify-content: space-between; padding: 12px 20px; background: #fff; }",
+        ".card { padding: 12px; border: 1px solid #e5e5e5; border-radius: 10px; margin: 8px 0; }",
     ]},
     {"path": "media/README.md", "lang": "md", "lines": [
         "# media/",
@@ -639,12 +656,21 @@ def clean_admin(models, raw):
     return out
 
 
-def admin_code(models, cfg=None):
-    """app/admin.py: modellarni Django admin panelida ko'rsatish."""
+ADMIN_HEADER = "Django administration"
+
+
+def admin_code(models, cfg=None, site=None):
+    """app/admin.py: modellarni Django admin panelida ko'rsatish (+ panel nomi, agar o'zgartirilgan bo'lsa)."""
     cfg = clean_admin(models, cfg or {})
+    header = (site or {}).get("header") or ADMIN_HEADER
+    top = []
+    if header != ADMIN_HEADER:
+        top = ["# Admin panel nomi (yuqoridagi sarlavha va brauzer tabidagi nom)",
+               f"admin.site.site_header = {header!r}", f"admin.site.site_title = {header!r}",
+               "admin.site.index_title = 'Boshqaruv'", ""]
     if not models:
-        return ["# modellar yo'q — Kod → app/models.py da model yarating"]
-    out = []
+        return top + ["# modellar yo'q — Kod → app/models.py da model yarating"]
+    out = list(top)
     for m in models:
         c, n = cfg[m["name"]], m["name"]
         if not c["on"]:

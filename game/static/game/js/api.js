@@ -14,6 +14,10 @@ export async function call(method, url, body) {
     headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken() },
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401) {                 // sessiya tugagan — kirish sahifasiga
+    location.href = "/kirish/?next=/";
+    throw new Error("Avval akkauntga kiring.");
+  }
   let data;
   try {
     data = await res.json();
@@ -49,6 +53,10 @@ export const api = {
   code: (fields) => call("POST", "/api/code", fields),
   rotate: (key) => call("POST", "/api/rotate", { key }),
   models: (models) => call("POST", "/api/models", { models }),
+  // 💻 lokal: noldan loyiha (terminal vazifasi)
+  dev: (task) => call("POST", "/api/dev", { task }),
+  profile: (gh_user) => call("POST", "/api/profile", { gh_user }),
+  web: (action, payload = {}) => call("POST", "/api/web", { action, ...payload }),
   // 🚀 ishga tushirish: domain / github / deploy / ssl
   growth: (kind, id) => call("POST", "/api/growth", { kind, id }),
   offers: (offers) => call("POST", "/api/offers", { offers }),
@@ -57,6 +65,7 @@ export const api = {
   resume: () => call("POST", "/api/resume"),
   withdraw: () => call("POST", "/api/withdraw"),
   saveAdmin: (admin) => call("POST", "/api/admin", { admin }),
+  djadmin: (action, payload = {}) => call("POST", "/api/djadmin", { action, ...payload }),
   power: () => call("POST", "/api/power"),
   reset: () => call("POST", "/api/reset"),
 };

@@ -6,9 +6,14 @@ noto'g'ri ulanish sabab bilan rad etiladi, bloklar serverga joylanadi,
 2 ta Sayt + Load Balancer quvvatni oshiradi, kod o'zgarishi Git'ga yoziladi va h.k.
 """
 
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 
 from . import catalog, engine, project, rules, services
+from .models import Ledger, Room
+
+User = get_user_model()
 
 
 def make_layout(apps=1, workers=2, lb=False):
@@ -130,6 +135,9 @@ class ServiceTests(TestCase):
 
 class ApiTests(TestCase):
     def test_state_and_invalid_connection_effect(self):
+        self.assertEqual(self.client.get("/api/state").status_code, 401)     # kirmasdan — yo'q
+        u = User.objects.create_user("a@x.uz", "a@x.uz", "Qiyin-parol-77")
+        self.client.force_login(u)
         r = self.client.get("/api/state").json()
         self.assertTrue(r["ok"])
         ids = {b["kind"]: b["id"] for b in r["state"]["blocks"]}
@@ -434,3 +442,309 @@ class RealTimeTests(TestCase):
         self.assertIn(f"class {name}Admin(admin.ModelAdmin):", code)
         self.assertTrue(any("list_display" in l for l in code))
         self.assertFalse(any("yo'q_maydon" in l for l in code))
+
+
+class StartModesTests(TestCase):
+    """Uch xil boshlash: noldan (terminal), tayyor shablon, tayyor biznesni sotib olish."""
+
+    def test_scratch_starts_empty_and_files_appear_with_commands(self):
+        from . import devsetup
+        room = services.create_room("scratch", "Nol Dokon", "shop", coins=1000)
+        snap = services.snapshot(room)
+        self.assertEqual(snap["files"], [])                       # kod hali yo'q
+        self.assertFalse(room.blocks.filter(kind="server").exists())   # server yo'q — xarajat ham yo'q
+        self.assertEqual(snap["dev"]["done"], 0)
+        self.assertEqual(room.commits.count(), 0)
+        # tartibni buzib bo'lmaydi
+        with self.assertRaises(services.GameError):
+            services.dev_step(room, "startproject")
+        for t in devsetup.TASKS[:6]:                               # ... startproject
+            services.dev_step(room, t["id"])
+        files = services.snapshot(room)["files"]
+        self.assertIn("manage.py", files)
+        self.assertIn("config/settings.py", files)
+        self.assertNotIn("app/models.py", files)                   # startapp hali qilinmagan
+        # kod tayyor bo'lmaguncha GitHub va deploy yopiq
+        with self.assertRaises(services.GameError):
+            services.launch_step(room, "github", {"repo": "men/nol"})
+        for t in devsetup.TASKS[6:]:
+            services.dev_step(room, t["id"])
+        room.refresh_from_db()
+        snap = services.snapshot(room)
+        self.assertTrue(snap["dev"]["finished"])
+        self.assertIn("app/models.py", snap["files"])
+        self.assertTrue(room.code["env_gitignored"])               # "code ." da .env .gitignore ga yozildi
+        self.assertTrue(snap["dev"]["prompt"].startswith("(venv)"))
+        services.launch_step(room, "github", {"repo": "men/nol", "public": True})
+        self.assertGreaterEqual(room.commits.count(), 2)           # birinchi versiya + push
+
+    def test_buying_costs_money_and_business_already_runs(self):
+        room = services.create_room("bought", "Kupil", "shop", coins=1000)
+        self.assertEqual(room.coins, 1000 - 400)
+        snap = services.snapshot(room)
+        self.assertTrue(all(snap["launch"]["done"].values()))
+        self.assertEqual(snap["launch"]["domain"], "kupil.uz")
+        self.assertEqual(room.users, 300)
+        self.assertGreater(snap["finance"]["revenue"], 0)
+        self.assertTrue(snap["dev"]["finished"])
+
+    def test_buying_without_money_is_refused_and_reset_is_free(self):
+        services.create_room("starter", "Bor", "shop", coins=100)
+        with self.assertRaises(services.GameError):
+            services.create_room("bought", "Qimmat", "shop")
+        room = services.create_room("bought", "Arzon", "shop", coins=500)
+        again = services.reset_room(room)
+        self.assertEqual(again.coins, 100)                         # qayta boshlash uchun yana to'lanmaydi
+        self.assertEqual((again.flags or {}).get("mode"), "bought")
+
+    def test_lesson_builds_model_and_push_marks_github(self):
+        from . import devsetup
+        room = services.create_room("scratch", "Dars Dokon", "shop", coins=1000)
+        for t in devsetup.TASKS[:devsetup.IDX["makemigrations"] + 1]:
+            services.dev_step(room, t["id"])
+        room.refresh_from_db()
+        self.assertEqual([m["name"] for m in room.schema["models"]], ["Product"])   # dars modeli bazaga yozildi
+        self.assertEqual(room.commits.count(), 0)                  # git init hali qilinmagan — kommit yo'q
+        for t in devsetup.TASKS[devsetup.IDX["makemigrations"] + 1:]:
+            services.dev_step(room, t["id"])
+        room.refresh_from_db()
+        snap = services.snapshot(room)
+        self.assertTrue(snap["dev"]["finished"])
+        self.assertTrue(snap["launch"]["done"]["github"])          # git push → 🚀 GitHub qadami bajarildi
+        self.assertEqual(snap["launch"]["repo"], "men/darsdokon")
+        self.assertFalse(room.code["repo_public"])
+        self.assertTrue(room.commits.filter(message="birinchi versiya").exists())
+
+    def test_old_lesson_progress_is_migrated(self):
+        from . import devsetup
+        self.assertEqual(devsetup.progress({"mode": "scratch", "dev": 13}), len(devsetup.TASKS))   # eski darsni tugatgan
+        n = devsetup.progress({"mode": "scratch", "dev": 7})      # eski: ... startproject, startapp
+        self.assertEqual(devsetup.TASK_IDS[:n], ["mkdir", "cd", "venv", "activate", "django", "startproject", "rocket", "startapp"])
+        self.assertEqual(devsetup.progress({"mode": "scratch", "dev": 5, "dev_v": devsetup.DEV_VERSION}), 5)
+
+
+class ServerFirstTests(TestCase):
+    """Doska — bu serverlar: server bo'lmasa boshqa blok qo'yib bo'lmaydi."""
+
+    def test_blocks_need_a_server_first(self):
+        room = services.create_room("scratch", "Bo'sh", "shop", coins=1000)
+        for kind in ("nginx", "app", "postgres", "payment", "cdn"):
+            with self.assertRaises(services.GameError):
+                services.add_block(room, kind, 0, 0)
+        services.add_block(room, "server", 0, 0)
+        self.assertTrue(services.add_block(room, "nginx", 0, 0).host_id)
+
+
+class BrowserTests(TestCase):
+    """🌐 Brauzer: Bulutxon.uz (server), Domenchi.uz (domen + A yozuvi), GitHub username."""
+
+    def test_rent_buy_domain_and_point_a_record(self):
+        room = services.create_room("scratch", "Web Dokon", "shop", coins=1000)
+        srv, _msg = services.rent_server(room, "kichik")
+        room.refresh_from_db()
+        self.assertEqual(srv.config["tier"], "kichik")
+        self.assertEqual(room.coins, 1000)                         # oldindan to'lov yo'q — ijara soatbay yechiladi
+        with self.assertRaises(services.GameError):
+            services.buy_domain(room, "google.uz")                 # band
+        services.buy_domain(room, "webdokon.uz")
+        room.refresh_from_db()
+        snap = services.snapshot(room)
+        self.assertEqual(snap["launch"]["domain"], "webdokon.uz")
+        self.assertFalse(snap["launch"]["done"]["domain"])         # A yozuvi hali yo'q
+        with self.assertRaises(services.GameError):
+            services.set_dns(room, "8.8.8.8")                      # begona IP
+        services.set_dns(room, srv.ip)
+        room.refresh_from_db()
+        snap = services.snapshot(room)
+        self.assertTrue(snap["launch"]["done"]["domain"])
+        self.assertEqual(snap["launch"]["dns_ip"], srv.ip)
+
+    def test_github_username_is_shared_and_used_in_repo(self):
+        a = services.create_room("scratch", "Bir", "shop", coins=100)
+        b = services.create_room("starter", "Ikki", "shop")
+        with self.assertRaises(services.GameError):
+            services.set_profile(a, "yomon nom")
+        services.set_profile(a, "iskandar-dev")
+        b.refresh_from_db()
+        self.assertEqual(services.gh_user(b), "iskandar-dev")
+        self.assertTrue(services.snapshot(b)["ctx"]["repo"].startswith("iskandar-dev/"))
+
+
+class AccountTests(TestCase):
+    """Akkauntlar: email + parol, har kimning o'z startuplari va hamyoni, egasining paneli, g'azna."""
+
+    def setUp(self):
+        cache.clear()
+
+    def register(self, email, pw="Qiyin-parol-77", pw2=None):
+        return self.client.post("/royxat/", {"email": email, "password1": pw, "password2": pw2 or pw})
+
+    def test_register_hashes_password_and_first_is_owner(self):
+        old = services.create_room("scenario")                 # akkauntlardan oldingi startup
+        self.assertEqual(self.register("Ali@Mail.uz").status_code, 302)
+        u = User.objects.get(username="ali@mail.uz")
+        self.assertTrue(u.is_staff)
+        self.assertNotEqual(u.password, "Qiyin-parol-77")
+        self.assertTrue(u.password.startswith("pbkdf2_"))
+        old.refresh_from_db()
+        self.assertEqual(old.owner, u)                          # egasiz startup birinchi o'yinchiga o'tdi
+        self.client.post("/chiqish/")
+        self.register("vali@mail.uz")
+        self.assertFalse(User.objects.get(username="vali@mail.uz").is_staff)
+
+    def test_weak_password_and_duplicate_rejected(self):
+        r = self.register("a@b.uz", "12345678")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(User.objects.exists())
+        self.assertContains(r, "faqat raqam")
+        self.register("a@b.uz")
+        self.client.post("/chiqish/")
+        r = self.register("A@B.uz")
+        self.assertContains(r, "allaqachon")
+
+    def test_login_lockout(self):
+        User.objects.create_user("a@b.uz", "a@b.uz", "Qiyin-parol-77")
+        for _ in range(5):
+            self.client.post("/kirish/", {"email": "a@b.uz", "password": "xato-parol"})
+        r = self.client.post("/kirish/", {"email": "a@b.uz", "password": "Qiyin-parol-77"})
+        self.assertContains(r, "Juda ko")
+        self.assertEqual(self.client.get("/").status_code, 302)  # kira olmadi → /kirish/ ga
+
+    def test_rooms_and_wallets_are_separate(self):
+        a = User.objects.create_user("a@b.uz", "a@b.uz", "Qiyin-parol-77")
+        b = User.objects.create_user("b@b.uz", "b@b.uz", "Qiyin-parol-77")
+        ra = services.get_room(a)
+        rb = services.get_room(b)
+        self.assertNotEqual(ra.id, rb.id)
+        ra.coins = 999
+        ra.save()
+        rb.refresh_from_db()
+        self.assertNotEqual(rb.coins, 999)                      # boshqa o'yinchining hamyoni o'zgarmadi
+        ra2 = services.create_room("starter", "Ikkinchi", owner=a)
+        self.assertEqual(ra2.coins, 999)                        # o'z startuplari orasida — umumiy
+        with self.assertRaises(services.GameError):
+            services.switch_room(rb.id, a)                      # begona startupni ochib bo'lmaydi
+        self.client.force_login(a)
+        r = self.client.delete(f"/api/rooms/{rb.id}").json()
+        self.assertFalse(r["ok"])
+        self.assertTrue(Room.objects.filter(pk=rb.id).exists())
+
+    def test_treasury_and_owner_panel(self):
+        boss = User.objects.create_user("boss@b.uz", "boss@b.uz", "Qiyin-parol-77", is_staff=True)
+        p = User.objects.create_user("p@b.uz", "p@b.uz", "Qiyin-parol-77")
+        room = services.create_room("sandbox", "Do'kon", owner=p)
+        room.coins = 500
+        room.save()
+        services.buy_domain(room, "dokonim.uz")
+        services.rent_server(room, "kichik")
+        services.advance_hours(room, 3)
+        kinds = set(Ledger.objects.values_list("kind", flat=True))
+        self.assertEqual(kinds, {"domain", "rent"})          # server: oldindan to'lov yo'q, faqat soatbay
+        self.assertEqual(Ledger.objects.filter(kind="rent").count(), 1)    # soatlik ijara bitta qatorda
+
+        self.client.force_login(p)
+        self.assertEqual(self.client.get("/api/owner").status_code, 403)
+        self.client.force_login(boss)
+        o = self.client.get("/api/owner").json()["owner"]
+        self.assertGreater(o["treasury"]["total"], 15)
+        self.assertEqual(o["domains"][0]["domain"], "dokonim.uz")
+        day = room.day
+        r = self.client.post("/api/owner", {"action": "time", "room": room.id, "hours": 24},
+                             content_type="application/json").json()
+        self.assertTrue(r["ok"])
+        room.refresh_from_db()
+        self.assertEqual(room.day, day + 1)
+        self.client.post("/api/owner", {"action": "balance", "user": p.id, "amount": 1234},
+                         content_type="application/json")
+        room.refresh_from_db()
+        self.assertEqual(room.coins, 1234)
+        self.client.post("/api/owner", {"action": "release_domain", "room": room.id},
+                         content_type="application/json")
+        room.refresh_from_db()
+        self.assertIsNone(room.flags["launch"]["domain"])
+
+
+class DjangoAdminTests(TestCase):
+    """O'yinchi saytidagi Django admin: createsuperuser → login → panel nomi → app/admin.py."""
+
+    def test_superuser_login_and_header(self):
+        room = services.create_room("starter", "Do'kon")
+        with self.assertRaises(services.GameError):
+            services.dj_admin(room, {"action": "superuser", "username": "admin", "password": "123", "password2": "123"})
+        services.dj_admin(room, {"action": "superuser", "username": "admin",
+                                 "password": "Kuchli-parol-9", "password2": "Kuchli-parol-9"})
+        self.assertTrue(room.flags["dj_super"]["password"].startswith("pbkdf2_"))   # ochiq saqlanmaydi
+        with self.assertRaises(services.GameError):
+            services.dj_admin(room, {"action": "header", "header": "Do'kon paneli"})   # kirmasdan — yo'q
+        with self.assertRaises(services.GameError):
+            services.dj_admin(room, {"action": "login", "username": "admin", "password": "xato"})
+        services.dj_admin(room, {"action": "login", "username": "admin", "password": "Kuchli-parol-9"})
+        self.assertTrue(services.dj_admin_state(room)["logged"])
+        services.dj_admin(room, {"action": "header", "header": "Do'kon paneli"})
+        code = services.code_context(room)["admin_code"]
+        self.assertIn("admin.site.site_header = \"Do'kon paneli\"", code)
+        self.assertEqual(services.dj_admin_state(room)["header"], "Do'kon paneli")
+        self.assertTrue(room.commits.filter(message__contains="panel nomi").exists())
+
+
+class SnapshotRoomsTests(TestCase):
+    def test_room_list_is_owners_only(self):
+        a = User.objects.create_user("a@b.uz", "a@b.uz", "Qiyin-parol-77")
+        b = User.objects.create_user("b@b.uz", "b@b.uz", "Qiyin-parol-77")
+        ra, rb = services.get_room(a), services.get_room(b)
+        ids = [r["id"] for r in services.snapshot(ra)["rooms"]]
+        self.assertIn(ra.id, ids)
+        self.assertNotIn(rb.id, ids)
+
+
+class CancelTests(TestCase):
+    """Bulutxon: serverni o'chirish (ichidagilar bilan), Domenchi: domendan voz kechish."""
+
+    def test_cancel_server_and_drop_domain(self):
+        room = services.create_room("sandbox", "Do'kon")
+        room.coins = 500
+        room.save()
+        srv, _ = services.rent_server(room, "kichik")
+        services.add_block(room, "nginx", 0, 0, host_id=srv.id)
+        services.buy_domain(room, "dokonim.uz")
+        services.set_dns(room, srv.ip)
+        msg = services.cancel_server(room, srv.id)
+        self.assertIn("1 ta dastur", msg)
+        self.assertFalse(room.blocks.filter(pk=srv.id).exists())
+        self.assertIsNone(room.flags["launch"]["dns_ip"])          # domen endi hech qayerga qaramaydi
+        self.assertFalse(room.flags["launch"].get("deployed"))
+        services.drop_domain(room)
+        self.assertIsNone(room.flags["launch"]["domain"])
+        with self.assertRaises(services.GameError):
+            services.drop_domain(room)
+
+
+class WalletTests(TestCase):
+    """Hamyon: boshqa startuplar ham har so'rovda hisoblanadi — balans "sakramaydi"."""
+
+    def test_other_rooms_are_charged_continuously(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        u = User.objects.create_user("a@b.uz", "a@b.uz", "Qiyin-parol-77")
+        r1 = services.create_room("sandbox", "Bir", owner=u)
+        r1.coins = 1000
+        r1.save()
+        r2 = services.create_room("sandbox", "Ikki", owner=u)          # har birida 1 server
+        past = (timezone.now() - timedelta(seconds=services.HOUR_SECONDS * 5)).isoformat()
+        for r in (r1, r2):
+            r.refresh_from_db()
+            r.flags = {**r.flags, "last_tick": past}
+            r.save(update_fields=["flags"])
+        r2 = services.sync_owner(Room.objects.get(pk=r2.pk))
+        r1.refresh_from_db()
+        self.assertEqual(r1.coins, r2.coins)                              # bitta hamyon
+        self.assertLess(r2.coins, 1000 - 2 * 5 * 20 / 24 + 0.5)           # ikkalasining ijarasi yechildi
+        w = services.wallet_state(r2)
+        self.assertEqual(len(w["rooms"]), 2)
+        self.assertGreater(w["cost"], 0)
+
+    def test_server_has_root_password(self):
+        room = services.create_room("sandbox", "Bir")
+        srv = [b for b in services.snapshot(room)["blocks"] if b["kind"] == "server"][0]
+        self.assertEqual(srv["login"], "root")
+        self.assertRegex(srv["password"], r"^\w{4}-\w{4}-\w{4}$")

@@ -3,6 +3,8 @@ SENARIY: "Garaj → Birinchi toshqin".
 Bo'sh xona (sandbox) uchun esa SANDBOX_START ishlatiladi — faqat server va foydalanuvchilar.
 """
 
+from . import devsetup
+
 TITLE = "1-senariy · Garaj → Birinchi toshqin"
 STARTUP = "SmetaPro"
 INTRO = [
@@ -62,11 +64,46 @@ STARTER_START = {
 }
 
 
+# "Noldan" — dasturchidek: hali kod ham, server ham yo'q. Avval 💻 Lokal terminalda loyiha yaratiladi,
+# keyin doskada tizim quriladi va 🚀 bilan internetga chiqariladi. Server bo'lmagani uchun xarajat ham yo'q.
+SCRATCH_START = {
+    "name": "Yangi g'oya", "kind": "sandbox", "mode": "scratch",
+    "users": 0, "coins": 500, "power_limit_w": 600,
+    "servers": [],
+    "blocks": [("users", None, 20, 210, {})],
+    "edges": [],
+    "launch": {},
+}
+
+# "Tayyorini sotib olish" — ishlab turgan biznes: hamma narsa qurilgan va internetda.
+BUY_PRICE = 400
+BOUGHT_START = {
+    **STARTER_START, "name": "Sotib olingan biznes", "mode": "bought", "users": 300,
+    "launch": {"domain": None, "dns": "vps1", "github": True, "deployed": True, "ssl": True},
+}
+
+# Uch xil boshlash (yangi g'oya oynasida)
+MODES = {
+    "scratch": {"title": "Noldan — dasturchidek", "price": 0,
+                "text": "Kompyuteringizda terminal ochasiz: papka, venv, Django loyiha, app, static, media — "
+                        "hammasini buyruq bilan o'zingiz yaratasiz. Keyin server, domen va deploy. Eng ko'p o'rgatadi."},
+    "starter": {"title": "Tayyor shablondan", "price": 0,
+                "text": "Kod va tizim chizmasi tayyor (Nginx → Sayt → PostgreSQL + to'lov). Siz faqat 🚀 qadamlarni "
+                        "bajarib, internetga chiqarasiz va kengaytirasiz."},
+    "bought": {"title": "Tayyor biznesni sotib olish", "price": BUY_PRICE,
+               "text": "Ishlab turgan sayt: domen, HTTPS, 300 ta mijoz va daromad bor. Qurish shart emas — "
+                       "boshqarasiz, narx qo'yasiz, o'stirasiz."},
+}
+
 def goals(room, layout):
     f = room.flags or {}
     if room.kind == "sandbox":
         la = f.get("launch", {})
-        return [
+        local = []
+        if f.get("mode") == "scratch":
+            local = [{"id": "local", "text": "0. Kompyuteringizda Django loyiha yarating (chapdagi Dars bo'limi)",
+                      "done": devsetup.is_done(f), "hint": "local"}]
+        return local + [
             {"id": "server", "text": "1. Server oling (asboblar paneli)", "done": layout.has("server") and bool(layout.hosts), "hint": "launch"},
             {"id": "chain", "text": "Zanjir: Foydalanuvchilar → Nginx → Sayt → PostgreSQL", "done": layout.has("app") and layout.has("postgres"), "hint": "bottleneck"},
             {"id": "domain", "text": "2. Domen oling va serverga yo'naltiring", "done": bool(la.get("domain")), "hint": "launch"},

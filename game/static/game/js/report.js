@@ -23,7 +23,7 @@ function card(label, value, cls = "", sub = "") {
 }
 
 function chart(h) {
-  if (!h.length) return `<div class="muted rp-empty">Hali kun o'tmagan. ▶ yoki "+1 kun" bosing — grafik shu yerda chiziladi.</div>`;
+  if (!h.length) return `<div class="muted rp-empty">Hali kun o'tmagan. Vaqt real yuradi (1 kun = 20 daqiqa) — birinchi kun tugashi bilan grafik shu yerda chiziladi.</div>`;
   const W = 1000, H = 220, P = 30;
   const max = Math.max(...h.map((d) => Math.max(d.revenue, d.cost)), 10);
   const n = h.length, step = (W - 2 * P) / n, bw = Math.max(2, step / 2 - 1.5);
